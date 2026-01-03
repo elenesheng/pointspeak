@@ -23,15 +23,19 @@ import {
   EyeOff,
   Move,
   Eraser,
-  Palette
+  Palette,
+  Key
 } from 'lucide-react';
-import { getGeminiResponse, analyzeRoomSpace, identifyObject, translateIntentWithSpatialAwareness, validateSpatialChange, generateImageWithImagen3 } from './services/geminiService';
+import { getGeminiResponse, analyzeRoomSpace, identifyObject, translateIntentWithSpatialAwareness, validateSpatialChange, performImageEdit } from './services/geminiService';
 import { AppState, ReasoningLog, Coordinate, DetailedRoomAnalysis, IdentifiedObject, IntentTranslation, SpatialValidation } from './types';
 
 const App: React.FC = () => {
+  const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
+  const [isKeyChecking, setIsKeyChecking] = useState<boolean>(true);
+
   const [state, setState] = useState<AppState>({
     imageUrl: null,
-    pin: null,
+    pins: [],
     status: 'Idle',
     logs: [],
     userInput: '',
@@ -47,6 +51,26 @@ const App: React.FC = () => {
   const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
+    const checkKey = async () => {
+      try {
+        if (window.aistudio) {
+          const hasKey = await window.aistudio.hasSelectedApiKey();
+          setApiKeySelected(hasKey);
+        } else {
+          // Fallback for dev environments without the IDX overlay
+          setApiKeySelected(true);
+        }
+      } catch (e) {
+        console.error("Failed to check API key status", e);
+        setApiKeySelected(false);
+      } finally {
+        setIsKeyChecking(false);
+      }
+    };
+    checkKey();
+  }, []);
+
+  useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
@@ -58,6 +82,18 @@ const App: React.FC = () => {
       setShowGenerated(true);
     }
   }, [state.generatedImage]);
+
+  const handleConnectKey = async () => {
+    try {
+      if (window.aistudio) {
+        await window.aistudio.openSelectKey();
+        // Assume success to mitigate race condition
+        setApiKeySelected(true);
+      }
+    } catch (e) {
+      console.error("Failed to select key", e);
+    }
+  };
 
   const addLog = (content: string, type: ReasoningLog['type'] = 'thought', metadata?: any) => {
     const newLog: ReasoningLog = {
@@ -104,7 +140,7 @@ const App: React.FC = () => {
       setState(prev => ({
         ...prev,
         imageUrl: result,
-        pin: null,
+        pins: [],
         status: 'Scanning Room...',
         logs: [],
         roomAnalysis: null,
@@ -124,44 +160,77 @@ const App: React.FC = () => {
     // Prevent clicking if we are showing the generated image
     if (state.generatedImage && showGenerated) {
        setShowGenerated(false); // Switch back to original to allow pointing
-       // We don't return here, we let the click process on the original image logic below
-       // But wait, if they click on generated image, coordinate mapping might be wrong if aspect ratio differs.
-       // For now, let's just let them point on the original image mostly.
     }
 
     const rect = imageRef.current.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 1000;
     const y = ((e.clientY - rect.top) / rect.height) * 1000;
+    const newCoord: Coordinate = { x, y };
 
-    setState(prev => ({
-      ...prev,
-      pin: { x, y },
-      status: 'Analyzing Point...',
-      selectedObject: null
-    }));
-    
-    addLog(`Spatial focus lock: [${x.toFixed(0)}, ${y.toFixed(0)}]. Identifying target...`, 'action');
+    // Point-to-Point Logic
+    let newPins: Coordinate[] = [];
+    let shouldIdentify = false;
 
-    try {
-      // Always use original image for object ID
-      const base64 = state.imageUrl.split(',')[1];
-      const obj = await identifyObject(base64, x, y);
-      
-      setState(prev => ({ 
-        ...prev, 
-        selectedObject: obj,
-        status: 'Ready'
+    if (state.pins.length === 0) {
+      // First Click: Source
+      newPins = [newCoord];
+      shouldIdentify = true;
+      setState(prev => ({
+        ...prev,
+        pins: newPins,
+        status: 'Analyzing Source...',
+        selectedObject: null // Reset object as we are finding a new one
       }));
-      
-      addLog(`Object Identified: ${obj.name} (${obj.position})`, 'success', obj);
-    } catch (err) {
-      addLog('Could not identify object at this location.', 'error');
-      setState(prev => ({ ...prev, status: 'Ready' }));
+      addLog(`Source identified: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
+    } else if (state.pins.length === 1) {
+      // Second Click: Target
+      newPins = [...state.pins, newCoord];
+      setState(prev => ({
+        ...prev,
+        pins: newPins,
+        status: 'Target Set'
+      }));
+      addLog(`Target location set: [${x.toFixed(0)}, ${y.toFixed(0)}]. Ready for 'Move' command.`, 'action');
+    } else {
+      // Third Click: Reset and start over as Source
+      newPins = [newCoord];
+      shouldIdentify = true;
+      setState(prev => ({
+        ...prev,
+        pins: newPins,
+        status: 'Analyzing Source...',
+        selectedObject: null
+      }));
+      addLog(`Resetting. Source identified: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
+    }
+
+    if (shouldIdentify) {
+      try {
+        // Always use original image for object ID
+        const base64 = state.imageUrl.split(',')[1];
+        const obj = await identifyObject(base64, x, y);
+        
+        setState(prev => ({ 
+          ...prev, 
+          selectedObject: obj,
+          status: 'Ready'
+        }));
+        
+        addLog(`Object Identified: ${obj.name} (${obj.position})`, 'success', obj);
+      } catch (err) {
+        addLog('Could not identify object at this location.', 'error');
+        setState(prev => ({ ...prev, status: 'Ready' }));
+      }
     }
   };
 
   const handleAlternativeClick = (suggestion: string) => {
     setState(prev => ({ ...prev, userInput: suggestion }));
+  };
+
+  const getLastOperationType = (): string | undefined => {
+    const lastIntent = [...state.logs].reverse().find(l => l.type === 'intent');
+    return lastIntent?.metadata?.operation_type;
   };
 
   const handleSend = async () => {
@@ -172,6 +241,7 @@ const App: React.FC = () => {
     const userText = state.userInput;
     const identifiedObject = state.selectedObject;
     const spatialContext = state.roomAnalysis;
+    const currentPins = state.pins;
 
     setState(prev => ({ ...prev, status: 'Analyzing Point...', userInput: '' }));
     
@@ -183,7 +253,8 @@ const App: React.FC = () => {
         base64, 
         userText, 
         identifiedObject, 
-        spatialContext
+        spatialContext,
+        currentPins
       );
 
       addLog(translation.interpreted_intent, 'intent', translation);
@@ -218,21 +289,35 @@ const App: React.FC = () => {
         
         setState(prev => ({ ...prev, status: statusText }));
         
-        addLog(`Generative Engine Active: ${translation.operation_type} operation...`, 'thought');
+        addLog(`🍌 Nano Banana Pro: Editing the original image for ${translation.operation_type}...`, 'thought');
         
         try {
-           const genImage = await generateImageWithImagen3(translation.imagen_prompt);
-           setState(prev => ({ ...prev, generatedImage: genImage }));
-           addLog('Visualization complete.', 'success');
-        } catch (genErr) {
-           console.error("Image gen failed", genErr);
-           addLog('Visualization failed. Continuing with text response.', 'error');
+           const editedImage = await performImageEdit(base64, translation, identifiedObject);
+           setState(prev => ({ ...prev, generatedImage: editedImage }));
+           addLog('✓ Image successfully edited', 'success');
+        } catch (editErr: any) {
+           console.error("Nano Banana Pro edit failed:", editErr);
+           addLog(`⚠️ Image editing failed: ${editErr.message}`, 'error');
+           
+           if (editErr.message?.includes('PERMISSION_DENIED') || editErr.message?.includes('403') || editErr.message?.includes('Requested entity was not found')) {
+              addLog('PERMISSION DENIED: Please ensure you have selected a valid API key with billing enabled.', 'error');
+              // Trigger key selection if permission denied
+              await handleConnectKey();
+           } else if (editErr.message?.includes('quota')) {
+              addLog('Try again in a few minutes or enable billing.', 'error');
+           }
         }
       }
       
       // Final Follow up
       setState(prev => ({ ...prev, status: 'Generating Response...' }));
-      await getGeminiResponse(base64, `The user wants to: ${userText}. You've interpreted this as: ${translation.interpreted_intent}. Proposed action: ${translation.proposed_action}. Explain why this is a good idea or any spatial concerns.`, state.pin, (chunk) => {
+      const vectorDesc = currentPins.length === 2 ? `The user defined a vector from [${currentPins[0].x},${currentPins[0].y}] to [${currentPins[1].x},${currentPins[1].y}].` : "";
+      
+      await getGeminiResponse(
+        base64, 
+        `The user wants to: ${userText}. ${vectorDesc} You've interpreted this as: ${translation.interpreted_intent}. Proposed action: ${translation.proposed_action}. Explain why this is a good idea or any spatial concerns.`, 
+        currentPins, 
+        (chunk) => {
         // stream updates status but we add log at the end
       }).then(fullText => {
         addLog(fullText, 'success');
@@ -251,7 +336,7 @@ const App: React.FC = () => {
   const resetAll = () => {
     setState({
       imageUrl: null,
-      pin: null,
+      pins: [],
       status: 'Idle',
       logs: [],
       userInput: '',
@@ -261,6 +346,52 @@ const App: React.FC = () => {
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const getStatusIcon = () => {
+    if (state.status === 'Removing Object...') return <Trash2 className="w-16 h-16 text-rose-400 animate-pulse" />;
+    if (state.status === 'Repositioning Object...') return <Move className="w-16 h-16 text-sky-400 animate-pulse" />;
+    if (state.status === 'Transforming Object...') return <Sparkles className="w-16 h-16 text-purple-400 animate-pulse" />;
+    if (state.status === 'Generating Visualization...' || state.status === 'Editing Image with Nano Banana Pro...') return <ImageIcon className="w-16 h-16 text-emerald-400 animate-pulse" />;
+    return <ScanSearch className="w-16 h-16 text-indigo-400 animate-pulse" />;
+  };
+  
+  const getGeneratedLabel = () => {
+    const op = getLastOperationType();
+    if (op === 'REMOVE') return 'Original Image (Object Removed)';
+    if (op === 'MOVE') return 'Original Image (Object Repositioned)';
+    if (op === 'EDIT') return 'Original Image (Object Modified)';
+    return 'AI Generated Concept';
+  };
+
+  if (isKeyChecking) {
+    return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-slate-500">Checking permissions...</div>;
+  }
+
+  if (!apiKeySelected) {
+    return (
+      <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-2xl shadow-indigo-500/20">
+          <Target className="w-10 h-10 text-white" />
+        </div>
+        <h1 className="text-3xl font-bold text-slate-100 mb-2">PointSpeak Spatial Intelligence</h1>
+        <p className="text-slate-400 max-w-md mb-8">
+          To use the advanced Gemini 3 Pro image editing capabilities (Nano Banana Pro), you must connect a valid API key with billing enabled.
+        </p>
+        <button 
+          onClick={handleConnectKey}
+          className="flex items-center gap-3 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg hover:shadow-indigo-500/25 transform hover:-translate-y-1"
+        >
+          <Key className="w-5 h-5" />
+          Connect Google Cloud Project
+        </button>
+        <p className="text-xs text-slate-600 mt-6">
+          <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="hover:text-indigo-400 underline">
+            View Billing Documentation
+          </a>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden">
@@ -343,10 +474,10 @@ const App: React.FC = () => {
               />
               
               {/* Scan Overlay */}
-              {(state.status !== 'Ready' && state.status !== 'Idle' && state.status !== 'Analyzing Point...') && (
+              {(state.status !== 'Ready' && state.status !== 'Idle' && state.status !== 'Analyzing Source...' && state.status !== 'Target Set') && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-30 pointer-events-none">
                    <div className="relative">
-                      {(state.status === 'Generating Visualization...' || state.status === 'Removing Object...' || state.status === 'Repositioning Object...' || state.status === 'Transforming Object...') ? <ImageIcon className="w-16 h-16 text-emerald-400 animate-pulse" /> : <ScanSearch className="w-16 h-16 text-indigo-400 animate-pulse" />}
+                      {getStatusIcon()}
                       <div className={`absolute inset-0 blur-xl rounded-full ${(state.status === 'Generating Visualization...' || state.status.includes('Object...')) ? 'bg-emerald-500/20' : 'bg-indigo-500/20'}`} />
                    </div>
                    <p className={`mt-4 font-mono text-sm tracking-widest uppercase animate-pulse ${(state.status === 'Generating Visualization...' || state.status.includes('Object...')) ? 'text-emerald-300' : 'text-indigo-300'}`}>
@@ -358,33 +489,64 @@ const App: React.FC = () => {
               )}
 
               {/* Point Indicator on Hover */}
-              {!state.pin && state.status !== 'Scanning Room...' && !isProcessing && (
+              {state.pins.length === 0 && state.status !== 'Scanning Room...' && !isProcessing && (
                 <div className="absolute inset-0 opacity-0 group-hover:opacity-100 bg-black/5 pointer-events-none transition-opacity flex items-center justify-center">
                   <div className="flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-white/10">
                     <MousePointer2 className="w-4 h-4 text-white" />
-                    <span className="text-xs font-medium text-white">Click to focus Gemini Agent</span>
+                    <span className="text-xs font-medium text-white">Click to select object source</span>
                   </div>
                 </div>
               )}
 
-              {/* Placed Pin - Only show if showing original image, otherwise it might be misplaced or confusing */}
-              {state.pin && (!state.generatedImage || !showGenerated) && (
-                <div 
-                  className="absolute w-6 h-6 flex items-center justify-center z-20 transition-all duration-300"
-                  style={{ 
-                    left: `${state.pin.x / 10}%`, 
-                    top: `${state.pin.y / 10}%`,
-                    transform: 'translate(-50%, -50%)'
-                  }}
-                >
-                  <div className="w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-xl pin-pulse relative" />
-                </div>
+              {/* Pins and Vectors */}
+              {(!state.generatedImage || !showGenerated) && (
+                <>
+                  {/* SVG Layer for Dashed Arrow */}
+                  {state.pins.length === 2 && (
+                    <svg className="absolute inset-0 pointer-events-none w-full h-full z-10">
+                      <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+                          <polygon points="0 0, 10 3.5, 0 7" fill="#10b981" />
+                        </marker>
+                      </defs>
+                      <line 
+                        x1={`${state.pins[0].x / 10}%`} 
+                        y1={`${state.pins[0].y / 10}%`} 
+                        x2={`${state.pins[1].x / 10}%`} 
+                        y2={`${state.pins[1].y / 10}%`} 
+                        stroke="#10b981" 
+                        strokeWidth="3" 
+                        strokeDasharray="8,8"
+                        markerEnd="url(#arrowhead)"
+                        className="drop-shadow-lg"
+                      />
+                    </svg>
+                  )}
+
+                  {/* Pin Markers */}
+                  {state.pins.map((pin, index) => (
+                    <div 
+                      key={index}
+                      className="absolute w-6 h-6 flex items-center justify-center z-20 transition-all duration-300"
+                      style={{ 
+                        left: `${pin.x / 10}%`, 
+                        top: `${pin.y / 10}%`,
+                        transform: 'translate(-50%, -50%)'
+                      }}
+                    >
+                      <div className={`w-3 h-3 rounded-full border-2 border-white shadow-xl pin-pulse relative ${index === 0 ? 'bg-red-500' : 'bg-green-500'}`} />
+                      <div className={`absolute -top-6 px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-lg ${index === 0 ? 'bg-red-500' : 'bg-green-500'}`}>
+                        {index === 0 ? 'SOURCE' : 'TARGET'}
+                      </div>
+                    </div>
+                  ))}
+                </>
               )}
               
               {/* Label for generated image */}
               {state.generatedImage && showGenerated && (
                 <div className="absolute top-4 right-4 bg-emerald-600/90 text-white px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-lg backdrop-blur-md border border-emerald-400/30">
-                  AI Generated Concept
+                  {getGeneratedLabel()}
                 </div>
               )}
             </div>
@@ -401,7 +563,9 @@ const App: React.FC = () => {
             )}
             <div className="flex items-center gap-2 px-4 py-2 bg-slate-900/90 border border-slate-800 rounded-full backdrop-blur-md shadow-2xl">
               <span className="text-sm font-medium text-slate-300 italic">
-                {state.pin ? "Type a command for this object." : "Click anywhere on the image to set a spatial focus point."}
+                {state.pins.length === 0 ? "Click to select an object to interact with." :
+                 state.pins.length === 1 ? "Click a second point to set a target location." :
+                 "Type 'Move' to execute the spatial transfer."}
               </span>
             </div>
           </div>
@@ -429,7 +593,7 @@ const App: React.FC = () => {
               <p className="text-[10px] font-bold text-slate-500 uppercase">AI Status</p>
               <p className="text-sm font-semibold text-slate-200">{state.status}</p>
             </div>
-            {(isProcessing || state.status === 'Scanning Room...' || state.status === 'Analyzing Point...' || state.status === 'Validating...' || state.status.includes('Object...') || state.status === 'Generating Visualization...') && <Sparkles className="w-4 h-4 text-indigo-500 animate-spin" />}
+            {(isProcessing || state.status === 'Scanning Room...' || state.status === 'Analyzing Point...' || state.status === 'Validating...' || state.status.includes('Object...') || state.status === 'Generating Visualization...' || state.status === 'Editing Image with Nano Banana Pro...') && <Sparkles className="w-4 h-4 text-indigo-500 animate-spin" />}
           </div>
         </div>
 
@@ -605,7 +769,7 @@ const App: React.FC = () => {
               value={state.userInput}
               onChange={(e) => setState(prev => ({ ...prev, userInput: e.target.value }))}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              placeholder={state.selectedObject ? `Modify the ${state.selectedObject.name}...` : "Place a pin to select object..."}
+              placeholder={state.pins.length === 2 ? "Type 'Move' to execute..." : state.selectedObject ? `Modify the ${state.selectedObject.name}...` : "Select object to interact..."}
               className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 pr-12 text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/10 min-h-[100px] resize-none transition-all shadow-inner font-medium"
             />
             <button 

@@ -48,11 +48,22 @@ export interface SpatialValidation {
 
 export interface AppState {
   imageUrl: string | null;
-  pin: Coordinate | null;
-  status: 'Idle' | 'Scanning Room...' | 'Analyzing Point...' | 'Generating Response...' | 'Ready' | 'Validating...' | 'Generating Visualization...' | 'Removing Object...' | 'Repositioning Object...' | 'Transforming Object...';
+  pins: Coordinate[];
+  status: 'Idle' | 'Scanning Room...' | 'Analyzing Source...' | 'Target Set' | 'Analyzing Point...' | 'Generating Response...' | 'Ready' | 'Validating...' | 'Generating Visualization...' | 'Removing Object...' | 'Repositioning Object...' | 'Transforming Object...' | 'Editing Image with Nano Banana Pro...';
   logs: ReasoningLog[];
   userInput: string;
   roomAnalysis: DetailedRoomAnalysis | null;
   selectedObject: IdentifiedObject | null;
   generatedImage: string | null;
+}
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+
+  interface Window {
+    aistudio?: AIStudio;
+  }
 }
