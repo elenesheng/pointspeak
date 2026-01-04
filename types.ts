@@ -31,7 +31,7 @@ export interface IdentifiedObject {
 }
 
 export interface IntentTranslation {
-  operation_type: 'REMOVE' | 'MOVE' | 'EDIT';
+  operation_type: 'REMOVE' | 'MOVE' | 'EDIT' | 'SWAP';
   interpreted_intent: string;
   proposed_action: string;
   spatial_check_required: boolean;
