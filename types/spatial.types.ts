@@ -10,17 +10,42 @@ export interface RoomConstraint {
   description: string;
 }
 
+export interface RoomInsight {
+  category: string;
+  title: string;
+  description: string;
+  suggestions: string[];
+  system_instruction?: string; // Technical corrective prompt for the system
+}
+
 export interface DetailedRoomAnalysis {
   room_type: string;
+  is_2d_plan?: boolean; // New field for detection
   constraints: RoomConstraint[];
   traffic_flow: string;
+  insights?: RoomInsight[]; // Dynamic AI insights
+}
+
+export interface HierarchyPart {
+  name: string;
+  visual_details: string;
 }
 
 export interface IdentifiedObject {
   id: string;
-  name: string; // The specific sub-part (e.g., "Left Cabinet Door")
+  name: string; // The active name used for logic
   position: string;
-  parent_structure?: string; // The main object (e.g., "Kitchen Unit")
-  visual_details?: string; // Specific texture/color info
+  box_2d?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] Normalized 0-1000
+  parent_structure?: string; 
+  
+  // Hierarchy Details
+  specific_part?: HierarchyPart; // Micro level (e.g., "Freezer Handle")
+  whole_object?: HierarchyPart;  // Macro level (e.g., "Refrigerator")
+  
+  category?: 'Appliance' | 'Furniture' | 'Fixture' | 'Structure' | 'Decor' | 'Surface';
+  
+  visual_details?: string; // The active visuals used for logic
+  material_breakdown?: string;
+  neighbors_to_protect?: string;
   confidence?: number;
 }

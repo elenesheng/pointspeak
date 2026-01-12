@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Target, Key } from 'lucide-react';
+import { Target, Key, Sparkles } from 'lucide-react';
 
 // Hooks
 import { useReasoningLogs } from './hooks/useReasoningLogs';
@@ -12,45 +12,41 @@ import { useGeminiAgent } from './hooks/useGeminiAgent';
 import { Canvas } from './components/canvas/Canvas';
 import { ReasoningPanel } from './components/reasoning/ReasoningPanel';
 import { InputArea } from './components/input/InputArea';
+import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
 
 const App: React.FC = () => {
-  // --- Auth State ---
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
   const [isKeyChecking, setIsKeyChecking] = useState<boolean>(true);
 
-  // --- Domain State via Hooks ---
   const { logs, addLog, clearLogs } = useReasoningLogs();
   const { pins, addPin, resetPins } = usePinManagement();
   
-  // --- Gemini Agent ---
   const { 
     status, roomAnalysis, selectedObject, generatedImage, isProcessing, activeModel, setActiveModel,
     performInitialScan, identifyObjectAtLocation, executeCommand, analyzeReference, resetAgent, setSelectedObject,
-    // History Exports
     editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo
   } = useGeminiAgent({ addLog, pins });
 
-  // --- Image Upload ---
   const { imageUrl, handleFileUpload, clearImage } = useImageUpload(
-    () => resetAll(), // Clear logs/state on new upload
+    () => resetAll(),
     (base64) => performInitialScan(base64)
   );
   
-  // --- Reference Image ---
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceDesc, setReferenceDesc] = useState<string | null>(null);
 
   const [userInput, setUserInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [showInsights, setShowInsights] = useState(false);
 
-  // --- Auth Check Effect ---
   useEffect(() => {
     const checkKey = async () => {
       try {
         if (window.aistudio) {
           setApiKeySelected(await window.aistudio.hasSelectedApiKey());
         } else {
-          setApiKeySelected(true); // Fallback for local dev
+          setApiKeySelected(true); 
         }
       } catch (e) {
         setApiKeySelected(false);
@@ -61,25 +57,24 @@ const App: React.FC = () => {
     checkKey();
   }, []);
 
-  // --- Keyboard Shortcuts ---
+  // Auto-show insights only for long-running processes (Initial Scan or Generation)
+  // We exclude 'Analyzing Source...' because detection is now instant/client-side and shouldn't disrupt the view.
+  useEffect(() => {
+    if (isProcessing && status !== 'Analyzing Source...') {
+      setShowInsights(true);
+    }
+  }, [isProcessing, status]);
+
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !isProcessing) {
-        if (e.key === 'z' && !e.shiftKey) {
-          e.preventDefault();
-          if (canUndo) undoEdit();
-        }
-        if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) {
-          e.preventDefault();
-          if (canRedo) redoEdit();
-        }
+        if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (canUndo) undoEdit(); }
+        if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); if (canRedo) redoEdit(); }
       }
     };
     window.addEventListener('keydown', handleKeyboard);
     return () => window.removeEventListener('keydown', handleKeyboard);
   }, [canUndo, canRedo, undoEdit, redoEdit, isProcessing]);
-
-  // --- Handlers ---
 
   const handleConnectKey = async () => {
     if (window.aistudio) {
@@ -99,31 +94,31 @@ const App: React.FC = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Helper to get the ACTIVE image base64 (Original or Edited)
-  // With history support, the Hook manages generatedImage to reflect current index.
-  // If generatedImage is null, it means we are at index 0 (Original).
   const getActiveBase64 = () => {
-    if (generatedImage) {
-      return generatedImage.split(',')[1];
-    }
-    if (imageUrl) {
-      return imageUrl.split(',')[1];
-    }
+    if (generatedImage) return generatedImage.split(',')[1];
+    if (imageUrl) return imageUrl.split(',')[1];
     return null;
   };
 
   const handleImageClick = async (e: React.MouseEvent<HTMLDivElement>, rect: DOMRect) => {
     const activeBase64 = getActiveBase64();
-    if (!activeBase64 || isProcessing) return;
+    if (!activeBase64) return;
+
+    // ENFORCE SEQUENTIAL CLICKING: 
+    // If we have 1 pin, check if we are still identifying source.
+    if (pins.length === 1 && isProcessing) {
+       addLog('Wait for source identification before setting target.', 'error');
+       return;
+    }
+    
+    // If currently processing an image generation, block interaction
+    if (isProcessing && status !== 'Ready') return;
 
     const x = ((e.clientX - rect.left) / rect.width) * 1000;
     const y = ((e.clientY - rect.top) / rect.height) * 1000;
     
-    // Add visual pin
     addPin({ x, y });
 
-    // Logic: If 0 pins exist -> It's Source -> Identify
-    // If 1 pin exists -> It's Target -> Don't Identify yet
     if (pins.length === 0 || pins.length === 2) {
        if (pins.length === 2) {
            setSelectedObject(null);
@@ -131,7 +126,6 @@ const App: React.FC = () => {
        } else {
            addLog(`Source identified: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
        }
-       
        await identifyObjectAtLocation(activeBase64, x, y);
 
     } else if (pins.length === 1) {
@@ -141,21 +135,12 @@ const App: React.FC = () => {
 
   const handleSend = async (overrideData?: any) => {
     const activeBase64 = getActiveBase64();
-    if (!activeBase64 || (!userInput.trim() && !overrideData) || !selectedObject) return;
+    // Allow send if we have an image and input (or override), even if no object is selected (Global Mode)
+    if (!activeBase64 || (!userInput.trim() && !overrideData)) return;
     
     const refBase64 = referenceImage ? referenceImage.split(',')[1] : undefined;
-
-    // If overrideData is present, it means we are forcing execution
-    await executeCommand(
-      activeBase64, 
-      userInput, 
-      !!overrideData, 
-      overrideData,
-      referenceDesc || undefined,
-      refBase64
-    );
+    await executeCommand(activeBase64, userInput, !!overrideData, overrideData, referenceDesc || undefined, refBase64);
     
-    // Cleanup post-execution
     if (!overrideData) setUserInput('');
     setReferenceImage(null);
     setReferenceDesc(null);
@@ -166,24 +151,13 @@ const App: React.FC = () => {
     reader.onload = async (e) => {
       const result = e.target?.result as string;
       setReferenceImage(result);
-      
       const base64 = result.split(',')[1];
       const desc = await analyzeReference(base64);
       setReferenceDesc(desc);
-      
-      // Auto-fill input if empty to guide user
-      if (!userInput && desc) {
-        setUserInput(`Change material to...`); // Suggestion
-      }
+      // NOTE: Automatic text update is handled in InputArea.tsx to avoid race conditions
     };
     reader.readAsDataURL(file);
   };
-
-  const handleAlternativeClick = (suggestion: string) => {
-    setUserInput(suggestion);
-  };
-
-  // --- Render ---
 
   if (isKeyChecking) return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-slate-500">Checking permissions...</div>;
 
@@ -194,11 +168,6 @@ const App: React.FC = () => {
           <Target className="w-10 h-10 text-white" />
         </div>
         <h1 className="text-3xl font-bold text-slate-100 mb-2">PointSpeak Spatial Intelligence</h1>
-        <p className="text-slate-400 max-w-md mb-8">
-          Please connect your Google Cloud Project to access Gemini API capabilities.
-          <br/>
-          <span className="text-indigo-400 text-sm mt-2 block font-semibold">Gemini 3.0 Pro & 2.5 Flash Ready.</span>
-        </p>
         <button onClick={handleConnectKey} className="flex items-center gap-3 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg">
           <Key className="w-5 h-5" /> Connect API Key
         </button>
@@ -208,7 +177,6 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
-      {/* Canvas Area - Flex Grow */}
       <Canvas 
         imageUrl={imageUrl}
         generatedImage={generatedImage}
@@ -219,44 +187,54 @@ const App: React.FC = () => {
         onFileUpload={handleFileUpload}
         onReset={resetAll}
         fileInputRef={fileInputRef}
-        // History Props
-        canUndo={canUndo}
-        canRedo={canRedo}
-        currentEditIndex={currentEditIndex}
-        onUndo={undoEdit}
-        onRedo={redoEdit}
-        onResetToOriginal={resetToOriginal}
+        canUndo={canUndo} canRedo={canRedo} currentEditIndex={currentEditIndex}
+        onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
+        // Insights
+        hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
+        onToggleInsights={() => setShowInsights(!showInsights)}
       />
 
-      {/* Reasoning Sidebar - Fixed Width, Full Height Column */}
       <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl">
-          {/* Top Panel (Logs & History) */}
           <ReasoningPanel 
             logs={logs}
             status={status}
             isProcessing={isProcessing}
             onForceExecute={(action, object) => handleSend({ forceAction: action, forceObject: object })}
-            onAlternativeClick={handleAlternativeClick}
+            onAlternativeClick={(suggestion) => setUserInput(suggestion)}
             activeModel={activeModel}
             onModelChange={setActiveModel}
-            // History Props
             editHistory={editHistory}
             currentEditIndex={currentEditIndex}
             onJumpToHistory={jumpToEdit}
           />
           
-          {/* Bottom Panel (Input) */}
           <InputArea 
             userInput={userInput}
             setUserInput={setUserInput}
             onSend={() => handleSend()}
-            disabled={!imageUrl || isProcessing || !selectedObject}
-            placeholder={pins.length === 2 ? "Type 'Move' or 'Swap' to execute..." : selectedObject ? `Modify the ${selectedObject.name}...` : "Select object to interact..."}
+            disabled={!imageUrl || isProcessing}
+            placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
             onReferenceUpload={handleReferenceUpload}
             referenceImagePreview={referenceImage}
             onClearReference={() => { setReferenceImage(null); setReferenceDesc(null); }}
+            // Pass hierarchy handlers
+            selectedObject={selectedObject}
+            onObjectUpdate={setSelectedObject}
+            onClearSelection={() => {
+              setSelectedObject(null);
+              resetPins();
+            }}
           />
       </div>
+
+      {/* Insights Panel */}
+      <RoomInsightsPanel 
+        roomAnalysis={roomAnalysis}
+        isVisible={showInsights}
+        onClose={() => setShowInsights(false)}
+        status={status}
+        mode={isProcessing ? 'waiting' : 'viewing'}
+      />
     </div>
   );
 };

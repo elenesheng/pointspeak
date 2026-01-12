@@ -4,15 +4,17 @@
  */
 export const GEMINI_CONFIG = {
   MODELS: {
-    // Primary Reasoning: "Thinking" model to reduce hallucinations
-    REASONING: 'gemini-3-pro-preview', 
-    
-    // Fallback Reasoning & Fast Vision
-    REASONING_FALLBACK: 'gemini-3-flash-preview',
+    // Primary Reasoning: Use 2.5 Flash for speed and reliability with JSON Schemas
+    REASONING: 'gemini-3-flash-preview',
+
+    // Fallback
+    REASONING_FALLBACK: 'gemini-2.5-flash',
     
     // Image Generation Options
-    IMAGE_EDITING_FLASH: 'gemini-3-pro-image-preview',
-    IMAGE_EDITING_PRO: 'gemini-2.5-flash-image',
+    // General Image Generation: gemini-2.5-flash-image (Nano Banana)
+    IMAGE_EDITING_FLASH: 'gemini-2.5-flash-image',
+    // High-Quality: gemini-3-pro-image-preview (Nano Banana Pro / Imagen 3)
+    IMAGE_EDITING_PRO: 'gemini-3-pro-image-preview',
   },
   SETTINGS: {
     MAX_RETRIES: 2, 

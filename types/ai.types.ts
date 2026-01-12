@@ -1,5 +1,5 @@
 
-export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT' | 'SWAP';
+export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT';
 
 export interface IntentTranslation {
   operation_type: OperationType;

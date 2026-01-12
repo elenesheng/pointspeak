@@ -32,6 +32,9 @@ export type AppStatus =
   | 'Repositioning Object...' 
   | 'Transforming Object...' 
   | 'Editing Image...'
+  | 'Editing Image (Pro)...'
+  | 'Editing Image (Fast)...'
+  | 'Refining object detection...'
   | 'Analyzing Reference...';
 
 export interface AppState {

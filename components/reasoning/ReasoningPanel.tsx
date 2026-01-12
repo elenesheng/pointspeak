@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect } from 'react';
 import { ReasoningLog, AppStatus, EditHistoryEntry } from '../../types/ui.types';
 import { LogEntry } from './LogEntry';
@@ -85,24 +84,37 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
           <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Edit History</p>
           <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
             {editHistory.map((entry, index) => (
-              <button
-                key={index}
-                onClick={() => onJumpToHistory(index)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-2 border ${
-                  index === currentEditIndex 
-                    ? 'bg-indigo-600 text-white border-indigo-500' 
-                    : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
-                }`}
-              >
-                {index === 0 ? (
-                    <>📷 Original</>
-                ) : (
-                    <>
-                    <span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[9px]">{index}</span>
-                    {entry.operation}
-                    </>
+              <div key={index} className="relative group">
+                <button
+                  onClick={() => onJumpToHistory(index)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors flex items-center gap-2 border ${
+                    index === currentEditIndex 
+                      ? 'bg-indigo-600 text-white border-indigo-500' 
+                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                  }`}
+                >
+                  {index === 0 ? (
+                      <>📷 Original</>
+                  ) : (
+                      <>
+                      <span className="w-4 h-4 rounded-full bg-white/10 flex items-center justify-center text-[9px]">{index}</span>
+                      {entry.operation}
+                      </>
+                  )}
+                </button>
+                
+                {/* Hover Preview */}
+                {index > 0 && (
+                  <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none transition-all duration-200 bg-slate-900 p-2 rounded-lg border border-slate-700 shadow-2xl z-50">
+                    <img 
+                      src={`data:image/jpeg;base64,${entry.base64}`} 
+                      alt={entry.description}
+                      className="w-32 h-32 object-cover rounded"
+                    />
+                    <p className="text-xs text-slate-400 mt-2 text-center max-w-[128px]">{entry.description}</p>
+                  </div>
                 )}
-              </button>
+              </div>
             ))}
           </div>
         </div>

@@ -3,7 +3,7 @@ import React from 'react';
 import { ReasoningLog } from '../../types/ui.types';
 import { 
   CheckCircle2, AlertCircle, Map, Target, Cpu, ShieldCheck, ShieldAlert,
-  Eraser, Move, ArrowRightLeft, Palette, Sparkles, Activity, CornerDownRight, Zap
+  Eraser, Move, Palette, Sparkles, Activity, CornerDownRight, Zap
 } from 'lucide-react';
 
 interface LogEntryProps {
@@ -25,7 +25,6 @@ export const LogEntry: React.FC<LogEntryProps> = ({ log, onForceExecute, onAlter
         const op = log.metadata?.operation_type;
         if (op === 'REMOVE') return <Eraser className="w-4 h-4 text-rose-400" />;
         if (op === 'MOVE') return <Move className="w-4 h-4 text-sky-400" />;
-        if (op === 'SWAP') return <ArrowRightLeft className="w-4 h-4 text-amber-400" />;
         if (op === 'EDIT') return <Palette className="w-4 h-4 text-purple-400" />;
         return <Sparkles className="w-4 h-4 text-amber-400" />;
       default: return <Sparkles className="w-4 h-4 text-slate-400" />;

@@ -5,10 +5,6 @@ import { DetailedRoomAnalysis, IdentifiedObject } from "../../types/spatial.type
 import { GEMINI_CONFIG } from "../../config/gemini.config";
 import { getApiKey } from "../../utils/apiUtils";
 
-/**
- * Perform Image Editing.
- * Uses the Photorealistic Image Editor persona with specific prompt template.
- */
 export const performImageEdit = async (
   currentImageBase64: string,
   translation: IntentTranslation,
@@ -19,189 +15,159 @@ export const performImageEdit = async (
   referenceMaterialDescription?: string,
   referenceImageBase64?: string | null
 ): Promise<string> => {
+  
+  // 1. Initialize Client
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
 
-  // Subjects
-  const subjectName = (translation as any).active_subject_name || identifiedObject.name;
-  const subjectDesc = translation.source_visual_context || identifiedObject.visual_details || subjectName;
-  const targetName = targetObject ? (targetObject.parent_structure || targetObject.name) : "Target Area";
-  const targetDesc = translation.target_visual_context || (targetObject ? targetObject.visual_details : "the destination");
+  // 2. Prepare Context Variables
+  const subjectName = identifiedObject.name;
+  const targetCoords = targetObject?.position || "the clicked location";
   const sourceCoords = identifiedObject.position;
-  const targetCoords = targetObject?.position || "Target Coordinates";
+  
+  // Detect if user wants to hang something on a wall (Mirror, Art, Clock)
+  const promptLower = (translation.proposed_action + " " + subjectName).toLowerCase();
+  const isVerticalDecor = /art|painting|canvas|poster|mirror|sconce|clock/i.test(promptLower);
 
-  const generatePrompt = () => {
-    let actionBlock = "";
+  // 3. Helper: Build Strict Prompt using User's Template
+  const buildStrictPrompt = (additionalInstructions: string = "") => {
+    return `Output must have the same width, height, and aspect ratio as Image 1. Do not resize or crop anything.
 
-    // STRICT SWAP LOGIC to prevent Hallucinations
-    if (translation.operation_type === 'SWAP') {
-      return `
-<SYSTEM_INSTRUCTION>
-You are an expert Photorealistic Image Editor.
-</SYSTEM_INSTRUCTION>
+INSTRUCTION:
+- Apply only this action to object.
+- Leave everything else unchanged.
+- Verify dimension integrity.
 
-<USER_PROMPT>
-CRITICAL INSTRUCTION: PIXEL-PERFECT OBJECT SWAP.
+STRICT SYSTEM RULES (HIGHEST PRIORITY):
+1. Output must match Image 1’s exact pixel width, height, and aspect ratio.
+2. No cropping, zooming, outpainting, or extending the frame.
+3. Do not alter any pixel outside the specified target boundary.
+4. Preserve lighting, perspective, and scene geometry of the original photo.
 
-OBJECT A (Currently at ${sourceCoords}):
-- Name: "${subjectName}"
-- Visuals: ${subjectDesc}
-- Action: MOVE TO ${targetCoords}.
+TEXTURE CONTINUITY RULE:
+- Any newly generated pixel must match the grain, noise, and sharpness of adjacent original pixels.
+- Do NOT smooth, blur, or airbrush flat surfaces.
+- Preserve natural photographic noise.
 
-OBJECT B (Currently at ${targetCoords}):
-- Name: "${targetName}"
-- Visuals: ${targetDesc}
-- Action: MOVE TO ${sourceCoords}.
+TASK:
+Modify only the object described below using the provided reference image if applicable.
 
-EXECUTION RULES:
-1. Do not distort the dimensions of Object A or B.
-2. Synthesize the background behind where the objects USED to be (Inpainting).
-3. Ensure lighting on both objects matches their NEW location.
-</USER_PROMPT>
-      `;
-    } 
-    
-    // Standard Operations
-    else if (translation.operation_type === 'MOVE') {
-      actionBlock = `
-   - Move "${subjectName}" to ${targetCoords}.
-   - ERASE it completely from ${sourceCoords} and fill the gap with the floor/wall texture found at ${sourceCoords}.
-      `;
-    } else if (translation.operation_type === 'REMOVE') {
-       actionBlock = `
-   - Completely ERASE the "${subjectName}" at ${sourceCoords}.
-   - Fill the gap with the floor/wall texture found at ${sourceCoords}.
+PRESERVE:
+- All scene elements outside the subject boundary exactly as in Image 1.
+
+TARGET:
+Object: "${subjectName}"
+Location: ${sourceCoords}
+
+INSTRUCTION:
+${translation.proposed_action}
+${additionalInstructions}
+
+${referenceImageBase64 ? `REFERENCE MATERIAL:
+Use only as a texture source, warped to match perspective.
+Do not replace surrounding background.
+Only modify the target object inside its original mask.` : ''}
+
+OUTPUT REQUIREMENTS:
+- Same image metadata dimensions as input.
+- No hallucinated content beyond the object.
+
+END
+Follow the original image content exactly. Where uncertain, preserve the original pixel.`;
+  };
+
+  // 4. Define the "Anti-Hallucination" Prompt for Flash
+  const generateFlashPrompt = () => {
+    let specificInstr = "";
+    if (translation.operation_type === 'REMOVE') {
+       specificInstr = "INSTRUCTION: Erase object. Fill with background to match surroundings seamlessly.";
+    }
+    return buildStrictPrompt(specificInstr);
+  };
+
+  // 5. Define the Pro Prompt
+  const generateProPrompt = () => {
+    // Determine edit type for constraint logic
+    const isStructuralEdit = translation.operation_type === 'MOVE' || 
+                             /align|height|fit|resize|fill|gap|structure|cabinet/i.test(translation.proposed_action);
+
+    let modeInstructions = "";
+    // CONSTRAINT LOGIC
+    if (isStructuralEdit) {
+       modeInstructions = `
+       MODE: ARCHITECTURAL_CORRECTION (CARPENTER MODE)
+       - TASK: Fix the alignment/height of the "${subjectName}".
+       - PROBLEM: If the target object is shorter than the reference (e.g., trying to align an Oven with a taller Fridge), DO NOT STRETCH the appliance.
+       - SOLUTION: ADD FILLER MATERIALS. You must generate new cabinetry, trim, wooden panels, or "filler strips" (charcho) above or below the object to fill the gap.
+       - GOAL: Create a continuous "Visual Line" at the top and bottom.
+       - PROTECTED: Keep the appliance itself realistic (standard size). Only modify the Cabinetry around it.
        `;
     } else {
-      // EDIT or EDIT_MATERIAL
-      if (referenceImageBase64) {
-          actionBlock = `
-   - Apply the material visible in the REFERENCE IMAGE (inline data) to the "${subjectName}".
-   - Match the perspective and lighting of the room.
-   - If the reference image contains text (e.g., "Oak"), prioritize that material definition.
-          `;
-      } else {
-          actionBlock = `
-   - Modify the "${subjectName}" at ${sourceCoords} according to: ${translation.proposed_action}.
-   - Match the perspective and lighting of the room.
-          `;
-      }
+       modeInstructions = `
+       MODE: SURFACE_EDIT
+       - STRICT CONSTRAINT: PRESERVE ALL GEOMETRY. Only change pixels inside target boundary.
+       - NEIGHBOR PROTECTION: Change ONLY the "${subjectName}" at ${sourceCoords}.
+       `;
     }
 
-    return `
-<SYSTEM_INSTRUCTION>
-You are an expert Photorealistic Image Editor. You will receive an input image and instructions to modify it.
-</SYSTEM_INSTRUCTION>
-
-<USER_PROMPT>
-INPUT IMAGE: [Provided Image Part]
-${referenceImageBase64 ? 'REFERENCE IMAGE: [Provided as Second Image Part]' : 'REFERENCE IMAGE: None'}
-
-OPERATION: ${translation.operation_type}
-
-INSTRUCTIONS:
-1. SOURCE ANCHOR: I have identified the object at ${sourceCoords} as a "${subjectName}".
-   - Visual Description: ${subjectDesc}
-
-2. TARGET ANCHOR: I have identified the object at ${targetCoords} as a "${targetName}".
-   - Visual Description: ${targetDesc}
-
-3. ACTION:
-${actionBlock}
-
-CONSTRAINT: The result must be indistinguishable from a real photograph. Lighting and shadows must match the room's global illumination.
-</USER_PROMPT>
-    `;
+    return buildStrictPrompt(modeInstructions);
   };
 
   try {
-    const fullPrompt = generatePrompt();
     const isPro = preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO;
+    const fullPrompt = isPro ? generateProPrompt() : generateFlashPrompt();
     
-    console.log(`[${isPro ? 'PRO' : 'FLASH'}] Executing Image Edit...`);
-    
-    // Construct parts array (MULTIMODAL SUPPORT)
+    console.log(`[${preferredModelId}] Executing Edit...`);
+
+    // 6. Prepare Payload (Base64 Mode)
     const parts: any[] = [
       { inlineData: { mimeType: 'image/jpeg', data: currentImageBase64 } }
     ];
-    
-    // Push Reference Image if available (Logic for Visual Transfer)
     if (referenceImageBase64) {
       parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceImageBase64 } });
     }
-    
     parts.push({ text: fullPrompt });
 
+    // 7. Execute with Specific Configs
     const response = await ai.models.generateContent({
       model: preferredModelId,
-      contents: {
-        parts: parts,
-      },
+      contents: { parts },
       config: { 
-        imageConfig: isPro ? { imageSize: '2K' } : undefined,
+        // CRITICAL: Lower temperature for Flash to stop hallucinations
+        temperature: isPro ? 0.4 : 0.15, 
+        topP: 0.9,
+        topK: 40,
+        // Only Pro supports specific imageConfig in some versions
+        // imageConfig: isPro ? { imageSize: '2K' } : undefined 
       } 
     });
 
-    // ROBUST RESPONSE PARSING
-    // 1. Check for Direct Image Part
+    // 8. Extract Image
+    // Check inline data first
     for (const part of response.candidates?.[0]?.content?.parts || []) {
         if (part.inlineData?.data) return `data:image/jpeg;base64,${part.inlineData.data}`;
     }
 
-    // 2. Check for Base64 in Text Part (Hallucination Fix: Model sometimes returns text wrapped base64)
+    // Check text for embedded base64 (fallback)
     const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
     if (textPart) {
-      // Regex to find data:image... or a long base64 string
       const base64Match = textPart.match(/data:image\/[a-zA-Z]*;base64,([^\"]*)/);
-      if (base64Match && base64Match[1]) {
-        return `data:image/jpeg;base64,${base64Match[1]}`;
-      }
-      
-      // Look for raw markdown image syntax
-      const markdownMatch = textPart.match(/\!\[.*?\]\((.*?)\)/);
-      if (markdownMatch && markdownMatch[1].startsWith('data:')) {
-          return markdownMatch[1];
-      }
+      if (base64Match && base64Match[1]) return `data:image/jpeg;base64,${base64Match[1]}`;
     }
     
-    throw new Error("No image data found in model response.");
+    throw new Error("No image generated.");
 
   } catch (error: any) {
-    console.warn(`Attempt with ${preferredModelId} failed. Error: ${error.message}`);
-
-    // Fallback to Flash
+    console.warn(`Edit failed with ${preferredModelId}: ${error.message}`);
+    
+    // Fallback Logic: If Pro fails, try Flash
     if (preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO) {
-       console.log("Initiating Automatic Fallback to Flash...");
-       try {
-         const prompt = generatePrompt();
-         const parts: any[] = [
-            { inlineData: { mimeType: 'image/jpeg', data: currentImageBase64 } }
-         ];
-         if (referenceImageBase64) {
-            parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceImageBase64 } });
-         }
-         parts.push({ text: prompt });
-
-         const fallbackResponse = await ai.models.generateContent({
-            model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_FLASH,
-            contents: {
-              parts: parts,
-            },
-          });
-
-          for (const part of fallbackResponse.candidates?.[0]?.content?.parts || []) {
-              if (part.inlineData?.data) return `data:image/jpeg;base64,${part.inlineData.data}`;
-          }
-       } catch (fallbackError) {
-         console.error("Fallback failed.");
-       }
-    }
-
-    // External Fallback (Last Resort)
-    if (GEMINI_CONFIG.FLAGS.ENABLE_FALLBACK_GENERATION) {
-        console.warn("Generating external fallback...");
-        const simplePrompt = `Photorealistic interior design: ${translation.proposed_action} in ${spatialContext.room_type}`;
-        return `https://image.pollinations.ai/prompt/${encodeURIComponent(simplePrompt)}?width=1024&height=1024&model=flux&nologo=true`;
+       console.log("Falling back to Flash...");
+       return performImageEdit(
+         currentImageBase64, translation, identifiedObject, spatialContext, 
+         GEMINI_CONFIG.MODELS.IMAGE_EDITING_FLASH, // Switch model
+         targetObject, referenceMaterialDescription, referenceImageBase64
+       );
     }
     throw error;
   }

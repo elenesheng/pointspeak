@@ -8,7 +8,7 @@ import { getApiKey, withSmartRetry, generateCacheKey } from "../../utils/apiUtil
  * Uses the Material & Texture Analyst persona.
  */
 export const analyzeReferenceImage = async (base64Image: string): Promise<string> => {
-  const cacheKey = generateCacheKey('refAnalysis_v4', base64Image.substring(0, 50));
+  const cacheKey = generateCacheKey('refAnalysis_v41_object_id', base64Image.substring(0, 50));
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
@@ -18,15 +18,16 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
       You are a Material & Texture Analyst. Your job is to extract style information from reference images to be applied to 3D objects.
 
       YOUR ANALYSIS STEPS:
-      1. TEXT DETECTION: Look for any written text (brand names, color codes, material types like "Oak", "Marble"). Use this text to ground your analysis.
-      2. TEXTURE ANALYSIS: Describe the physical surface. Is it matte, glossy, rough, grain-filled, woven?
-      3. COLOR EXTRACTION: Name the dominant color and the accent colors.
+      1. OBJECT IDENTITY: What is the primary object shown? (e.g., "Stainless Steel Refrigerator", "Velvet Sofa").
+      2. TEXT DETECTION: Look for any written text (brand names, color codes).
+      3. TEXTURE ANALYSIS: Describe the physical surface. Is it matte, glossy, rough, grain-filled, woven?
+      4. COLOR EXTRACTION: Name the dominant color and the accent colors.
 
       OUTPUT FORMAT (String):
-      "Material: [Name found in text or inferred]. Texture: [Detailed Texture]. Color: [Color]. Style: [Modern/Rustic/Etc]."
+      "Object: [Object Name]. Material: [Material Name]. Texture: [Detailed Texture]. Color: [Color]. Style: [Modern/Rustic/Etc]."
 
       Example Output:
-      "Material: White Carrara Marble. Texture: Polished, smooth with grey veining. Color: Cool white with charcoal veins. Style: Luxury Stone."
+      "Object: French Door Refrigerator. Material: Brushed Stainless Steel. Texture: Smooth, vertical grain. Color: Silver/Grey. Style: Modern."
       `;
 
       const response = await ai.models.generateContent({
@@ -39,7 +40,7 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
         },
         config: {
            responseMimeType: "text/plain",
-           temperature: 0.3,
+           temperature: 0.2, // Low temp for accuracy
         }
       });
 
@@ -57,7 +58,7 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
        try {
          return await runRefAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK);
        } catch (fallbackError) {
-         return "Material: Custom. Texture: Inferred from image. Color: As seen.";
+         return "Object: Unknown. Material: Custom. Texture: Inferred from image. Color: As seen.";
        }
     }
   }, cacheKey);
