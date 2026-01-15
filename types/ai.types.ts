@@ -20,6 +20,7 @@ export interface IntentTranslation {
     alternative_suggestion?: string;
   };
   conversational_response?: string;
+  active_subject_name?: string;
 }
 
 export interface SpatialValidation {

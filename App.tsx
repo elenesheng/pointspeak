@@ -1,18 +1,20 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Target, Key, Sparkles } from 'lucide-react';
+import { Target, Key, Sparkles, Zap } from 'lucide-react';
 
 // Hooks
 import { useReasoningLogs } from './hooks/useReasoningLogs';
 import { usePinManagement } from './hooks/usePinManagement';
 import { useImageUpload } from './hooks/useImageUpload';
 import { useGeminiAgent } from './hooks/useGeminiAgent';
+import { useAutonomousAgent } from './hooks/useAutonomousAgent';
 
 // Components
 import { Canvas } from './components/canvas/Canvas';
 import { ReasoningPanel } from './components/reasoning/ReasoningPanel';
 import { InputArea } from './components/input/InputArea';
 import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
+import { AutonomousAgentModal } from './components/autonomous/AutonomousAgentModal';
 
 const App: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
@@ -26,6 +28,21 @@ const App: React.FC = () => {
     performInitialScan, identifyObjectAtLocation, executeCommand, analyzeReference, resetAgent, setSelectedObject,
     editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo
   } = useGeminiAgent({ addLog, pins });
+  
+  const {
+    isAutonomousMode,
+    agentState,
+    analyses,
+    isModalOpen,
+    openModal,
+    closeModal,
+    startAutonomousMode,
+    pauseAgent,
+    resumeAgent,
+    stopAgent,
+    exportAnalysisReport,
+    exportImages
+  } = useAutonomousAgent(addLog);
 
   const { imageUrl, handleFileUpload, clearImage } = useImageUpload(
     () => resetAll(),
@@ -58,7 +75,6 @@ const App: React.FC = () => {
   }, []);
 
   // Auto-show insights only for long-running processes (Initial Scan or Generation)
-  // We exclude 'Analyzing Source...' because detection is now instant/client-side and shouldn't disrupt the view.
   useEffect(() => {
     if (isProcessing && status !== 'Analyzing Source...') {
       setShowInsights(true);
@@ -67,14 +83,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !isProcessing) {
+      if ((e.ctrlKey || e.metaKey) && !isProcessing && !isAutonomousMode) {
         if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (canUndo) undoEdit(); }
         if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); if (canRedo) redoEdit(); }
       }
     };
     window.addEventListener('keydown', handleKeyboard);
     return () => window.removeEventListener('keydown', handleKeyboard);
-  }, [canUndo, canRedo, undoEdit, redoEdit, isProcessing]);
+  }, [canUndo, canRedo, undoEdit, redoEdit, isProcessing, isAutonomousMode]);
 
   const handleConnectKey = async () => {
     if (window.aistudio) {
@@ -88,6 +104,8 @@ const App: React.FC = () => {
     clearLogs();
     clearImage();
     resetAgent();
+    // Ensure autonomous mode is stopped if active
+    if (isAutonomousMode) stopAgent();
     setReferenceImage(null);
     setReferenceDesc(null);
     setUserInput('');
@@ -101,17 +119,17 @@ const App: React.FC = () => {
   };
 
   const handleImageClick = async (e: React.MouseEvent<HTMLDivElement>, rect: DOMRect) => {
+    // Block clicks during autonomous mode
+    if (isAutonomousMode) return;
+
     const activeBase64 = getActiveBase64();
     if (!activeBase64) return;
 
-    // ENFORCE SEQUENTIAL CLICKING: 
-    // If we have 1 pin, check if we are still identifying source.
     if (pins.length === 1 && isProcessing) {
        addLog('Wait for source identification before setting target.', 'error');
        return;
     }
     
-    // If currently processing an image generation, block interaction
     if (isProcessing && status !== 'Ready') return;
 
     const x = ((e.clientX - rect.left) / rect.width) * 1000;
@@ -134,8 +152,9 @@ const App: React.FC = () => {
   };
 
   const handleSend = async (overrideData?: any) => {
+    if (isAutonomousMode) return;
+    
     const activeBase64 = getActiveBase64();
-    // Allow send if we have an image and input (or override), even if no object is selected (Global Mode)
     if (!activeBase64 || (!userInput.trim() && !overrideData)) return;
     
     const refBase64 = referenceImage ? referenceImage.split(',')[1] : undefined;
@@ -146,6 +165,21 @@ const App: React.FC = () => {
     setReferenceDesc(null);
   };
 
+  const handleStartAutonomous = async (config: any) => {
+    const workingImage = getActiveBase64();
+    if (!workingImage || !roomAnalysis) {
+      addLog("Cannot start autonomous mode: Missing image or analysis.", 'error');
+      return;
+    }
+    
+    await startAutonomousMode(
+      config,
+      workingImage,
+      roomAnalysis,
+      (img, text, force, override) => executeCommand(img, text, force, override)
+    );
+  };
+
   const handleReferenceUpload = async (file: File) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -154,7 +188,6 @@ const App: React.FC = () => {
       const base64 = result.split(',')[1];
       const desc = await analyzeReference(base64);
       setReferenceDesc(desc);
-      // NOTE: Automatic text update is handled in InputArea.tsx to avoid race conditions
     };
     reader.readAsDataURL(file);
   };
@@ -187,11 +220,15 @@ const App: React.FC = () => {
         onFileUpload={handleFileUpload}
         onReset={resetAll}
         fileInputRef={fileInputRef}
-        canUndo={canUndo} canRedo={canRedo} currentEditIndex={currentEditIndex}
+        canUndo={canUndo && !isAutonomousMode} 
+        canRedo={canRedo && !isAutonomousMode} 
+        currentEditIndex={currentEditIndex}
         onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
         // Insights
         hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
         onToggleInsights={() => setShowInsights(!showInsights)}
+        // Autonomous Trigger
+        onOpenAutonomous={openModal}
       />
 
       <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl">
@@ -212,7 +249,7 @@ const App: React.FC = () => {
             userInput={userInput}
             setUserInput={setUserInput}
             onSend={() => handleSend()}
-            disabled={!imageUrl || isProcessing}
+            disabled={!imageUrl || isProcessing || isAutonomousMode}
             placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
             onReferenceUpload={handleReferenceUpload}
             referenceImagePreview={referenceImage}
@@ -234,6 +271,21 @@ const App: React.FC = () => {
         onClose={() => setShowInsights(false)}
         status={status}
         mode={isProcessing ? 'waiting' : 'viewing'}
+      />
+
+      {/* Autonomous Modal */}
+      <AutonomousAgentModal
+        isOpen={isModalOpen}
+        onClose={closeModal}
+        agentState={agentState}
+        onStart={handleStartAutonomous}
+        onPause={pauseAgent}
+        onResume={resumeAgent}
+        onStop={stopAgent}
+        disabled={!imageUrl || (isProcessing && !isAutonomousMode)}
+        analyses={analyses}
+        onExportReport={exportAnalysisReport}
+        onExportImages={exportImages}
       />
     </div>
   );

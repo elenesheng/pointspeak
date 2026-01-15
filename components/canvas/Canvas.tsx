@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Upload, Trash2, ScanSearch, Trash, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Timer, Layers } from 'lucide-react';
+import { Upload, Trash2, ScanSearch, Trash, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Timer, Layers, Zap } from 'lucide-react';
 import { Coordinate } from '../../types/spatial.types';
 import { AppStatus } from '../../types/ui.types';
 
@@ -25,13 +25,14 @@ interface CanvasProps {
   onToggleInsights: () => void;
   // New props for timer
   estimatedTime?: number;
+  onOpenAutonomous?: () => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
   imageUrl, generatedImage, status, pins, isProcessing,
   onImageClick, onFileUpload, onReset, fileInputRef,
   canUndo, canRedo, currentEditIndex, onUndo, onRedo, onResetToOriginal,
-  hasInsights, onToggleInsights, estimatedTime
+  hasInsights, onToggleInsights, estimatedTime, onOpenAutonomous
 }) => {
   const [imgError, setImgError] = useState(false);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
@@ -100,8 +101,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     return "✅ Ready - Type your command below";
   };
   
-  // Logic: Do not blur if we are just refining object detection.
-  // This allows the user to see the result while the background process runs.
   const isRefining = status === 'Refining object detection...';
   const shouldBlur = isProcessing && !isRefining;
 
@@ -178,6 +177,17 @@ export const Canvas: React.FC<CanvasProps> = ({
              )}
            </div>
 
+           {/* Autonomous Button */}
+           {onOpenAutonomous && (
+              <button
+                onClick={onOpenAutonomous}
+                className="p-2 mr-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-all shadow-lg shadow-purple-900/20 group"
+                title="Open Autonomous Agent"
+              >
+                <Zap className="w-5 h-5 group-hover:animate-pulse" />
+              </button>
+           )}
+
            <button onClick={onReset} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white" title="Clear Session">
              <Trash2 className="w-5 h-5" />
            </button>
@@ -211,7 +221,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             />
           )}
 
-          {/* Ripple Effects */}
           {ripples.map(ripple => (
             <div
               key={ripple.id}
@@ -225,7 +234,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             />
           ))}
 
-          {/* Custom Crosshair Cursor */}
           {showCrosshair && cursorPos && !isProcessing && imageRef.current && (
             <>
               <div 
@@ -256,7 +264,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             </>
           )}
           
-          {/* REFINING INDICATOR (NEW) */}
           {isRefining && (
             <div className="absolute top-4 right-4 z-40 flex items-center gap-2 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-indigo-500/30 shadow-xl animate-in fade-in slide-in-from-top-2">
                <Layers className="w-3 h-3 text-indigo-400 animate-pulse" />
@@ -264,7 +271,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             </div>
           )}
           
-          {/* Standard Status Overlay (Only when blurred) */}
           {shouldBlur && status !== 'Idle' && status !== 'Analyzing Source...' && status !== 'Target Set' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-30 pointer-events-none">
                 <div className="relative">
@@ -274,7 +280,6 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <p className="mt-4 font-mono text-sm tracking-widest uppercase animate-pulse text-indigo-300">
                   {status}
                 </p>
-                {/* Timer */}
                 {estimatedTime !== undefined && estimatedTime > 0 && (
                    <div className="mt-2 flex items-center gap-1.5 px-3 py-1 bg-slate-900/50 rounded-full border border-slate-700/50 backdrop-blur-md">
                       <Timer className="w-3 h-3 text-slate-400" />
@@ -284,7 +289,6 @@ export const Canvas: React.FC<CanvasProps> = ({
             </div>
           )}
 
-          {/* Enhanced Pins (Hide during blur to avoid clutter) */}
           {!shouldBlur && (
           <>
             {pins.length === 2 && (

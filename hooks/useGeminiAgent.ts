@@ -260,14 +260,14 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
 
   // 4. Main Execution
   const executeCommand = async (
-    _unusedOriginalBase64: string, 
+    inputBase64: string, 
     userText: string, 
     forceOverride: boolean = false, 
     overrideData?: any,
     referenceDescription?: string,
     referenceImageBase64?: string
-  ) => {
-    const workingBase64 = currentWorkingImage;
+  ): Promise<string | undefined> => {
+    const workingBase64 = inputBase64 || currentWorkingImage;
     if (!roomAnalysis || !workingBase64) {
       addLog("No active image to edit. Please upload a photo.", 'error');
       return;
@@ -425,9 +425,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         addLog(`✓ Smart Scan: Updated objects in edited region, preserved others.`, 'thought');
       }
 
+      return pureBase64; // Return for Autonomous Agent chaining
+
     } catch (err) {
       const appErr = mapApiError(err);
       addLog(`Failed: ${appErr.message}`, 'error');
+      return undefined;
     } finally {
       setActiveRefImage(null);
       setActiveRefDesc(null);
