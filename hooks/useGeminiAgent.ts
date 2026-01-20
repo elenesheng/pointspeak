@@ -241,6 +241,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
 
   // 3. Analyze Reference
   const analyzeReference = async (referenceBase64: string): Promise<string | null> => {
+    setIsProcessing(true); // Lock UI
     setStatus('Analyzing Reference...');
     addLog('Analyzing reference material...', 'thought');
     setActiveRefImage(referenceBase64);
@@ -255,6 +256,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       return null;
     } finally {
       setStatus('Ready');
+      setIsProcessing(false); // Unlock UI
     }
   };
 
@@ -497,5 +499,6 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     canUndo: currentEditIndex > 0,
     canRedo: currentEditIndex < editHistory.length - 1,
     estimatedTime, 
+    scannedObjects, // Exported for UI visualization
   };
 };

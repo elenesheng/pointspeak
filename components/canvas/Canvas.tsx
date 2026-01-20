@@ -1,7 +1,7 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Upload, Trash2, ScanSearch, Trash, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Timer, Layers, Zap } from 'lucide-react';
-import { Coordinate } from '../../types/spatial.types';
+import { Upload, Trash2, ScanSearch, Trash, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Timer, Layers, Zap, Map as MapIcon, ArrowRight, LayoutTemplate, Camera, Info } from 'lucide-react';
+import { Coordinate, IdentifiedObject } from '../../types/spatial.types';
 import { AppStatus } from '../../types/ui.types';
 
 interface CanvasProps {
@@ -20,29 +20,169 @@ interface CanvasProps {
   onUndo: () => void;
   onRedo: () => void;
   onResetToOriginal: () => void;
-  // New props for insights toggle
   hasInsights: boolean;
   onToggleInsights: () => void;
-  // New props for timer
   estimatedTime?: number;
   onOpenAutonomous?: () => void;
+  detectedObjects?: IdentifiedObject[];
+  onGenerateFromPlan?: (planBase64: string, maskBase64: string, refBase64: string | null, stylePrompt: string) => void;
+  // Multi-View Props
+  visualizationViews?: string[];
+  activeViewIndex?: number;
+  onViewSwitch?: (index: number) => void;
 }
+
+// --- MORPHOLOGICAL OPERATIONS (Lightweight Client-Side) ---
+
+const getPixelIndex = (x: number, y: number, width: number) => (y * width + x) * 4;
+
+// EROSION: Shrinks white areas. Removes thin lines (text, furniture lines).
+// Pixel is kept WHITE only if ALL neighbors are WHITE.
+const applyErosion = (data: Uint8ClampedArray, width: number, height: number) => {
+  const output = new Uint8ClampedArray(data);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = getPixelIndex(x, y, width);
+      // Check 3x3 kernel
+      let allWhite = true;
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          if (data[getPixelIndex(x + kx, y + ky, width)] === 0) {
+            allWhite = false;
+            break;
+          }
+        }
+        if (!allWhite) break;
+      }
+      const val = allWhite ? 255 : 0;
+      output[idx] = output[idx + 1] = output[idx + 2] = val;
+      output[idx + 3] = 255;
+    }
+  }
+  return output;
+};
+
+// DILATION: Expands white areas. Restores wall thickness after erosion.
+// Pixel becomes WHITE if ANY neighbor is WHITE.
+const applyDilation = (data: Uint8ClampedArray, width: number, height: number) => {
+  const output = new Uint8ClampedArray(data);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const idx = getPixelIndex(x, y, width);
+      let anyWhite = false;
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          if (data[getPixelIndex(x + kx, y + ky, width)] === 255) {
+            anyWhite = true;
+            break;
+          }
+        }
+        if (anyWhite) break;
+      }
+      const val = anyWhite ? 255 : 0;
+      output[idx] = output[idx + 1] = output[idx + 2] = val;
+      output[idx + 3] = 255;
+    }
+  }
+  return output;
+};
+
+// Robust Mask Generation Pipeline
+const generateBinaryMask = async (imageSrc: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("Could not get canvas context");
+
+        ctx.drawImage(img, 0, 0);
+        let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let data = imageData.data;
+
+        // 1. Thresholding (Invert: Dark walls become White, Light background becomes Black)
+        for (let i = 0; i < data.length; i += 4) {
+          const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          // Threshold logic: If dark (<128), it's structure -> Make White. Else Black.
+          const val = brightness < 150 ? 255 : 0; 
+          data[i] = data[i + 1] = data[i + 2] = val;
+          data[i + 3] = 255;
+        }
+
+        // 2. Morphological Opening (Erode -> Dilate)
+        // This removes thin noise (text) but keeps thick blocks (walls)
+        let processedData = applyErosion(data, canvas.width, canvas.height); // Remove text
+        processedData = applyDilation(processedData, canvas.width, canvas.height); // Restore walls
+        processedData = applyDilation(processedData, canvas.width, canvas.height); // Thicken slightly for safety
+
+        imageData.data.set(processedData);
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = (e) => reject(e);
+    img.src = imageSrc;
+  });
+};
 
 export const Canvas: React.FC<CanvasProps> = ({ 
   imageUrl, generatedImage, status, pins, isProcessing,
   onImageClick, onFileUpload, onReset, fileInputRef,
   canUndo, canRedo, currentEditIndex, onUndo, onRedo, onResetToOriginal,
-  hasInsights, onToggleInsights, estimatedTime, onOpenAutonomous
+  hasInsights, onToggleInsights, estimatedTime, onOpenAutonomous,
+  detectedObjects = [], onGenerateFromPlan,
+  visualizationViews = [], activeViewIndex = 0, onViewSwitch
 }) => {
   const [imgError, setImgError] = useState(false);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [showCrosshair, setShowCrosshair] = useState(false);
+  const [hoveredObject, setHoveredObject] = useState<IdentifiedObject | null>(null);
   const [ripples, setRipples] = useState<Array<{ x: number; y: number; id: number }>>([]);
   const imageRef = useRef<HTMLImageElement>(null);
+  
+  // New Render Mode State
+  const [uploadMode, setUploadMode] = useState<'photo' | 'plan'>('photo');
+  const [planFile, setPlanFile] = useState<File | null>(null);
+  const [refFile, setRefFile] = useState<File | null>(null);
+  const [planPreview, setPlanPreview] = useState<string | null>(null);
+  const [refPreview, setRefPreview] = useState<string | null>(null);
+  const [stylePrompt, setStylePrompt] = useState("");
+
+  const planInputRef = useRef<HTMLInputElement>(null);
+  const refInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setImgError(false);
   }, [generatedImage, imageUrl]);
+
+  // Clean local state function
+  const cleanLocalState = () => {
+    setPlanFile(null);
+    setRefFile(null);
+    setPlanPreview(null);
+    setRefPreview(null);
+    setStylePrompt("");
+    if (planInputRef.current) planInputRef.current.value = '';
+    if (refInputRef.current) refInputRef.current.value = '';
+  };
+
+  const handleModeSwitch = (mode: 'photo' | 'plan') => {
+      onReset(); // Clear parent state immediately
+      setUploadMode(mode);
+      cleanLocalState();
+  };
+
+  const handleFullReset = () => {
+    onReset(); // Call parent reset
+    cleanLocalState(); // Clear local state
+    setUploadMode('photo'); // Reset to default mode
+  };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!imageRef.current || !imageUrl || isProcessing) return;
@@ -54,14 +194,36 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
       setCursorPos({ x, y });
       setShowCrosshair(true);
+
+      // Check for hovered object
+      if (detectedObjects.length > 0) {
+        const normX = (x / rect.width) * 1000;
+        const normY = (y / rect.height) * 1000;
+        
+        // Find smallest object that contains cursor
+        const match = detectedObjects
+          .filter(obj => obj.box_2d && 
+             normX >= obj.box_2d[1] && normX <= obj.box_2d[3] &&
+             normY >= obj.box_2d[0] && normY <= obj.box_2d[2]
+          )
+          .sort((a, b) => {
+             const areaA = (a.box_2d![2] - a.box_2d![0]) * (a.box_2d![3] - a.box_2d![1]);
+             const areaB = (b.box_2d![2] - b.box_2d![0]) * (b.box_2d![3] - b.box_2d![1]);
+             return areaA - areaB;
+          })[0];
+          
+        setHoveredObject(match || null);
+      }
     } else {
       setShowCrosshair(false);
+      setHoveredObject(null);
     }
   };
 
   const handleMouseLeave = () => {
     setShowCrosshair(false);
     setCursorPos(null);
+    setHoveredObject(null);
   };
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -71,7 +233,6 @@ export const Canvas: React.FC<CanvasProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Add ripple effect
     const rippleId = Date.now();
     setRipples(prev => [...prev, { x, y, id: rippleId }]);
     setTimeout(() => {
@@ -79,6 +240,45 @@ export const Canvas: React.FC<CanvasProps> = ({
     }, 1000);
     
     onImageClick(e, rect);
+  };
+
+  const handlePlanUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+       const file = e.target.files[0];
+       setPlanFile(file);
+       const reader = new FileReader();
+       reader.onload = (e) => setPlanPreview(e.target?.result as string);
+       reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRefUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+       const file = e.target.files[0];
+       setRefFile(file);
+       const reader = new FileReader();
+       reader.onload = (e) => setRefPreview(e.target?.result as string);
+       reader.readAsDataURL(file);
+    }
+  };
+
+  const executeRender = async () => {
+      if (planPreview && onGenerateFromPlan) {
+          try {
+             const maskDataUrl = await generateBinaryMask(planPreview);
+             
+             const planBase64 = planPreview.split(',')[1];
+             const maskBase64 = maskDataUrl.split(',')[1];
+             const refBase64 = refPreview ? refPreview.split(',')[1] : null;
+             
+             onGenerateFromPlan(planBase64, maskBase64, refBase64, stylePrompt);
+          } catch (e) {
+             console.error("Failed to generate mask", e);
+             // Fallback
+             const planBase64 = planPreview.split(',')[1];
+             onGenerateFromPlan(planBase64, planBase64, refPreview ? refPreview.split(',')[1] : null, stylePrompt);
+          }
+      }
   };
 
   const activeImage = (generatedImage && !imgError) ? generatedImage : imageUrl;
@@ -106,20 +306,125 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   if (!imageUrl) {
     return (
-      <div className="flex-1 flex items-center justify-center p-8 overflow-auto">
-        <div 
-          onClick={() => fileInputRef.current?.click()}
-          className="max-w-md w-full aspect-square border-2 border-dashed border-slate-800 rounded-3xl flex flex-col items-center justify-center gap-6 group cursor-pointer hover:border-indigo-500/50 hover:bg-slate-800/50 transition-all"
-        >
-          <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-            <Upload className="w-10 h-10 text-slate-500 group-hover:text-indigo-400" />
-          </div>
-          <div className="text-center">
-            <p className="text-lg font-medium text-slate-300">Start Spatial Analysis</p>
-            <p className="text-sm text-slate-500 mt-1">Upload a photo to point and chat</p>
-          </div>
+      <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-auto bg-slate-900/50">
+        
+        {/* Tab Switcher */}
+        <div className="flex p-1 bg-slate-800 rounded-xl mb-8 border border-slate-700">
+           <button 
+             onClick={() => handleModeSwitch('photo')}
+             className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${uploadMode === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+           >
+             <ScanSearch className="w-4 h-4" /> Analyze Photo
+           </button>
+           <button 
+             onClick={() => handleModeSwitch('plan')}
+             className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${uploadMode === 'plan' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
+           >
+             <MapIcon className="w-4 h-4" /> Visualize Plan
+           </button>
         </div>
+
+        {uploadMode === 'photo' ? (
+            /* Classic Upload */
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className="max-w-md w-full aspect-square border-2 border-dashed border-slate-700 rounded-3xl flex flex-col items-center justify-center gap-6 group cursor-pointer hover:border-indigo-500/50 hover:bg-slate-800/50 transition-all animate-in zoom-in-95 duration-300"
+            >
+              <div className="w-20 h-20 bg-slate-800 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                <Upload className="w-10 h-10 text-slate-500 group-hover:text-indigo-400" />
+              </div>
+              <div className="text-center px-8">
+                <p className="text-xl font-bold text-slate-200">Point & Speak Analysis</p>
+                <p className="text-sm text-slate-500 mt-2">Upload an existing interior photo to edit, rearrange, or analyze using spatial reasoning.</p>
+              </div>
+            </div>
+        ) : (
+            /* Plan Visualization Mode */
+            <div className="w-full max-w-4xl grid grid-cols-2 gap-8 animate-in zoom-in-95 duration-300">
+               {/* Left: Inputs */}
+               <div className="space-y-6">
+                  <div className="space-y-2">
+                     <label className="text-xs font-bold text-slate-400 uppercase tracking-wide">1. Floor Plan (Structure)</label>
+                     <div 
+                        onClick={() => planInputRef.current?.click()}
+                        className={`h-40 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all ${planPreview ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-700 hover:border-indigo-500/50 hover:bg-slate-800/50'}`}
+                     >
+                        {planPreview ? (
+                           <img src={planPreview} className="h-full w-full object-contain rounded-xl p-2" alt="Plan" />
+                        ) : (
+                           <>
+                           <LayoutTemplate className="w-8 h-8 text-slate-500 mb-2" />
+                           <span className="text-sm text-slate-400">Upload Floor Plan</span>
+                           </>
+                        )}
+                     </div>
+
+                     {/* Helper Tip */}
+                     <div className="flex items-start gap-2 bg-indigo-500/10 p-2 rounded-lg border border-indigo-500/20 mt-2">
+                        <Info className="w-4 h-4 text-indigo-400 mt-0.5 shrink-0" />
+                        <p className="text-[10px] text-indigo-200 leading-tight">
+                        <strong>Tip:</strong> For best 3D visualization, upload a <u>single room plan</u> (e.g. just the Kitchen) rather than a whole floor blueprint.
+                        </p>
+                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                     <label className="text-xs font-bold text-slate-400 uppercase tracking-wide">2. Reference Image (Style)</label>
+                     <div 
+                        onClick={() => refInputRef.current?.click()}
+                        className={`h-40 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all ${refPreview ? 'border-indigo-500/50 bg-indigo-500/5' : 'border-slate-700 hover:border-indigo-500/50 hover:bg-slate-800/50'}`}
+                     >
+                        {refPreview ? (
+                           <img src={refPreview} className="h-full w-full object-contain rounded-xl p-2" alt="Ref" />
+                        ) : (
+                           <>
+                           <ImageIcon className="w-8 h-8 text-slate-500 mb-2" />
+                           <span className="text-sm text-slate-400">Upload Style Reference (Optional)</span>
+                           </>
+                        )}
+                     </div>
+                  </div>
+               </div>
+
+               {/* Right: Prompt & Action */}
+               <div className="bg-slate-800/50 rounded-2xl p-6 border border-slate-700 flex flex-col">
+                  <h3 className="text-lg font-bold text-white mb-1">Visualization Studio</h3>
+                  <p className="text-xs text-slate-400 mb-6">Generates a realistic photo respecting the plan's structure and the reference's style.</p>
+                  
+                  <div className="flex-1">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2 block">Additional Requirements</label>
+                      <textarea 
+                         value={stylePrompt}
+                         onChange={(e) => setStylePrompt(e.target.value)}
+                         placeholder="E.g., Make it a cozy mid-century modern living room with warm lighting..."
+                         className="w-full h-32 bg-slate-900 border border-slate-700 rounded-xl p-3 text-sm text-slate-200 resize-none focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                  </div>
+
+                  <button 
+                     onClick={executeRender}
+                     disabled={!planFile || isProcessing}
+                     className="w-full mt-6 py-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl font-bold text-sm shadow-xl shadow-indigo-900/20 flex items-center justify-center gap-2 transition-all"
+                  >
+                     {isProcessing ? (
+                        <>
+                           <Sparkles className="w-4 h-4 animate-spin" /> Generating...
+                        </>
+                     ) : (
+                        <>
+                           <Sparkles className="w-4 h-4" /> Generate Visualization
+                           <ArrowRight className="w-4 h-4" />
+                        </>
+                     )}
+                  </button>
+               </div>
+            </div>
+        )}
+
+        {/* Hidden Inputs */}
         <input type="file" ref={fileInputRef as any} onChange={onFileUpload} className="hidden" accept="image/*" />
+        <input type="file" ref={planInputRef} onChange={handlePlanUpload} className="hidden" accept="image/*" />
+        <input type="file" ref={refInputRef} onChange={handleRefUpload} className="hidden" accept="image/*" />
       </div>
     );
   }
@@ -188,14 +493,14 @@ export const Canvas: React.FC<CanvasProps> = ({
               </button>
            )}
 
-           <button onClick={onReset} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white" title="Clear Session">
+           <button onClick={handleFullReset} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white" title="Clear Session">
              <Trash2 className="w-5 h-5" />
            </button>
         </div>
       </div>
 
       {/* Image Area */}
-      <div className="flex-1 flex items-center justify-center p-8 overflow-auto">
+      <div className="flex-1 flex items-center justify-center p-8 overflow-auto relative">
         <div 
           className={`relative max-h-full max-w-full inline-block rounded-xl shadow-2xl overflow-hidden group ${isProcessing ? 'cursor-wait' : 'cursor-none'}`}
           onClick={handleClick}
@@ -234,6 +539,24 @@ export const Canvas: React.FC<CanvasProps> = ({
             />
           ))}
 
+          {/* Hovered Object Overlay */}
+          {hoveredObject && hoveredObject.box_2d && !isProcessing && (
+            <div 
+               className="absolute z-20 pointer-events-none animate-in fade-in duration-200"
+               style={{
+                 top: `${hoveredObject.box_2d[0] / 10}%`,
+                 left: `${hoveredObject.box_2d[1] / 10}%`,
+                 height: `${(hoveredObject.box_2d[2] - hoveredObject.box_2d[0]) / 10}%`,
+                 width: `${(hoveredObject.box_2d[3] - hoveredObject.box_2d[1]) / 10}%`,
+               }}
+            >
+               <div className="w-full h-full border border-white/50 bg-white/5 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.2)]" />
+               <div className="absolute -top-6 left-0 bg-slate-900/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg border border-slate-700 whitespace-nowrap">
+                  {hoveredObject.name}
+               </div>
+            </div>
+          )}
+
           {showCrosshair && cursorPos && !isProcessing && imageRef.current && (
             <>
               <div 
@@ -252,15 +575,17 @@ export const Canvas: React.FC<CanvasProps> = ({
                   transform: 'translate(-50%, -50%)'
                 }}
               />
-              <div 
-                className="absolute bg-slate-900/90 text-indigo-300 px-2 py-1 rounded text-xs font-mono pointer-events-none z-30 backdrop-blur-sm border border-indigo-500/30"
-                style={{ 
-                  left: `${cursorPos.x + 15}px`, 
-                  top: `${cursorPos.y - 25}px`
-                }}
-              >
-                [{Math.round((cursorPos.x / imageRef.current.offsetWidth) * 1000)}, {Math.round((cursorPos.y / imageRef.current.offsetHeight) * 1000)}]
-              </div>
+              {!hoveredObject && (
+                <div 
+                  className="absolute bg-slate-900/90 text-indigo-300 px-2 py-1 rounded text-xs font-mono pointer-events-none z-30 backdrop-blur-sm border border-indigo-500/30"
+                  style={{ 
+                    left: `${cursorPos.x + 15}px`, 
+                    top: `${cursorPos.y - 25}px`
+                  }}
+                >
+                  [{Math.round((cursorPos.x / imageRef.current.offsetWidth) * 1000)}, {Math.round((cursorPos.y / imageRef.current.offsetHeight) * 1000)}]
+                </div>
+              )}
             </>
           )}
           
@@ -336,6 +661,26 @@ export const Canvas: React.FC<CanvasProps> = ({
           </>
           )}
         </div>
+        
+        {/* Multi-View Switcher UI */}
+        {visualizationViews && visualizationViews.length > 1 && !isProcessing && (
+           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-2 rounded-2xl border border-slate-700 shadow-2xl z-40 animate-in slide-in-from-bottom-6">
+              <div className="text-[10px] font-bold text-slate-500 uppercase px-2 flex items-center gap-1.5">
+                 <Camera className="w-3 h-3" /> Angles
+              </div>
+              <div className="w-px h-4 bg-slate-700" />
+              {visualizationViews.map((view, i) => (
+                <button
+                   key={i}
+                   onClick={() => onViewSwitch && onViewSwitch(i)}
+                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${activeViewIndex === i ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'}`}
+                >
+                   {i === 0 ? 'Wide' : i === 1 ? 'Eye' : 'Detail'}
+                </button>
+              ))}
+           </div>
+        )}
+        
       </div>
     </div>
   );

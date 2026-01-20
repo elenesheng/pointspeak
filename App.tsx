@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Target, Key, Sparkles, Zap } from 'lucide-react';
+import { Target, Key } from 'lucide-react';
 
 // Hooks
 import { useReasoningLogs } from './hooks/useReasoningLogs';
@@ -9,12 +9,17 @@ import { useImageUpload } from './hooks/useImageUpload';
 import { useGeminiAgent } from './hooks/useGeminiAgent';
 import { useAutonomousAgent } from './hooks/useAutonomousAgent';
 
+// Services
+import { generateMultiAngleRender } from './services/gemini/renderingService';
+
 // Components
 import { Canvas } from './components/canvas/Canvas';
 import { ReasoningPanel } from './components/reasoning/ReasoningPanel';
 import { InputArea } from './components/input/InputArea';
 import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
 import { AutonomousAgentModal } from './components/autonomous/AutonomousAgentModal';
+import { AutonomousProvider } from './contexts/AutonomousContext';
+import { AutonomousConfig } from './services/gemini/autonomousAgentService';
 
 const App: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
@@ -26,7 +31,7 @@ const App: React.FC = () => {
   const { 
     status, roomAnalysis, selectedObject, generatedImage, isProcessing, activeModel, setActiveModel,
     performInitialScan, identifyObjectAtLocation, executeCommand, analyzeReference, resetAgent, setSelectedObject,
-    editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo
+    editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo, scannedObjects
   } = useGeminiAgent({ addLog, pins });
   
   const {
@@ -44,7 +49,7 @@ const App: React.FC = () => {
     exportImages
   } = useAutonomousAgent(addLog);
 
-  const { imageUrl, handleFileUpload, clearImage } = useImageUpload(
+  const { imageUrl, handleFileUpload, clearImage, setImageUrl } = useImageUpload(
     () => resetAll(),
     (base64) => performInitialScan(base64)
   );
@@ -56,6 +61,11 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [showInsights, setShowInsights] = useState(false);
+  const [isGeneratingRender, setIsGeneratingRender] = useState(false);
+  
+  // Multi-View State
+  const [visualizationViews, setVisualizationViews] = useState<string[]>([]);
+  const [activeViewIndex, setActiveViewIndex] = useState(0);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -110,6 +120,9 @@ const App: React.FC = () => {
     setReferenceDesc(null);
     setUserInput('');
     if (fileInputRef.current) fileInputRef.current.value = '';
+    // Reset Views
+    setVisualizationViews([]);
+    setActiveViewIndex(0);
   };
 
   const getActiveBase64 = () => {
@@ -165,7 +178,7 @@ const App: React.FC = () => {
     setReferenceDesc(null);
   };
 
-  const handleStartAutonomous = async (config: any) => {
+  const handleStartAutonomous = async (config: AutonomousConfig) => {
     const workingImage = getActiveBase64();
     if (!workingImage || !roomAnalysis) {
       addLog("Cannot start autonomous mode: Missing image or analysis.", 'error');
@@ -186,10 +199,85 @@ const App: React.FC = () => {
       const result = e.target?.result as string;
       setReferenceImage(result);
       const base64 = result.split(',')[1];
+      
+      // analyzeReference now handles its own isProcessing state, locking the UI
       const desc = await analyzeReference(base64);
       setReferenceDesc(desc);
+      
+      // Auto-populate prompt AFTER analysis is complete
+      if (selectedObject) {
+         setUserInput(`Change ${selectedObject.name} using this reference`);
+      } else {
+         setUserInput(`Apply this reference style to the room`);
+      }
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleGenerateFromPlan = async (planBase64: string, maskBase64: string, refBase64: string | null, stylePrompt: string) => {
+    setIsGeneratingRender(true);
+    addLog('📐 Initiating Visualization Pipeline...', 'thought');
+    // EXPLICIT LOG MESSAGE
+    addLog('Generating single, immersive wide-angle perspective...', 'analysis');
+
+    try {
+      const resultImages = await generateMultiAngleRender(planBase64, maskBase64, refBase64, stylePrompt);
+      
+      addLog(`✓ Visualization complete.`, 'success');
+      
+      setVisualizationViews(resultImages);
+      setActiveViewIndex(0);
+      
+      // Load the first view automatically
+      const firstImage = resultImages[0];
+      setImageUrl(firstImage);
+      
+      // Perform initial scan on the first view
+      const pureBase64 = firstImage.split(',')[1];
+      performInitialScan(pureBase64);
+
+    } catch (e: any) {
+      addLog(`Render failed: ${e.message}`, 'error');
+    } finally {
+      setIsGeneratingRender(false);
+    }
+  };
+
+  const handleSwitchView = (index: number) => {
+    if (index < 0 || index >= visualizationViews.length) return;
+    
+    // Switch Active View
+    const newImage = visualizationViews[index];
+    setActiveViewIndex(index);
+    setImageUrl(newImage);
+    
+    // IMPORTANT: Reset agent state for the new view (new perspective = new objects)
+    resetAgent();
+    setVisualizationViews(visualizationViews); // Preserve views array after reset
+    setActiveViewIndex(index); // Preserve index after reset
+    setImageUrl(newImage); // Preserve image after reset
+
+    addLog(`Switched view. Scanning new perspective...`, 'action');
+    
+    const pureBase64 = newImage.split(',')[1];
+    performInitialScan(pureBase64);
+  };
+  
+  // Construct context value for Autonomous Agent
+  const autonomousContextValue = {
+    isAutonomousMode,
+    agentState,
+    analyses,
+    isModalOpen,
+    openModal,
+    closeModal,
+    startMarathon: handleStartAutonomous,
+    pauseAgent,
+    resumeAgent,
+    stopAgent,
+    exportAnalysisReport,
+    exportImages,
+    disabled: !imageUrl || (isProcessing && !isAutonomousMode)
   };
 
   if (isKeyChecking) return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-slate-500">Checking permissions...</div>;
@@ -209,85 +297,83 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
-      <Canvas 
-        imageUrl={imageUrl}
-        generatedImage={generatedImage}
-        status={status}
-        pins={pins}
-        isProcessing={isProcessing}
-        onImageClick={handleImageClick}
-        onFileUpload={handleFileUpload}
-        onReset={resetAll}
-        fileInputRef={fileInputRef}
-        canUndo={canUndo && !isAutonomousMode} 
-        canRedo={canRedo && !isAutonomousMode} 
-        currentEditIndex={currentEditIndex}
-        onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
-        // Insights
-        hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
-        onToggleInsights={() => setShowInsights(!showInsights)}
-        // Autonomous Trigger
-        onOpenAutonomous={openModal}
-      />
+    <AutonomousProvider value={autonomousContextValue}>
+      <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
+        <Canvas 
+          imageUrl={imageUrl}
+          generatedImage={generatedImage}
+          status={isGeneratingRender ? 'Generating Visualization...' : status}
+          pins={pins}
+          isProcessing={isProcessing || isGeneratingRender}
+          onImageClick={handleImageClick}
+          onFileUpload={handleFileUpload}
+          onReset={resetAll}
+          fileInputRef={fileInputRef}
+          canUndo={canUndo && !isAutonomousMode} 
+          canRedo={canRedo && !isAutonomousMode} 
+          currentEditIndex={currentEditIndex}
+          onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
+          // Insights
+          hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
+          onToggleInsights={() => setShowInsights(!showInsights)}
+          // Autonomous Trigger
+          onOpenAutonomous={openModal}
+          // Detected Objects for Visualization
+          detectedObjects={scannedObjects}
+          // New Render Prop
+          onGenerateFromPlan={handleGenerateFromPlan}
+          // Multi-View Props
+          visualizationViews={visualizationViews}
+          activeViewIndex={activeViewIndex}
+          onViewSwitch={handleSwitchView}
+        />
 
-      <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl">
-          <ReasoningPanel 
-            logs={logs}
-            status={status}
-            isProcessing={isProcessing}
-            onForceExecute={(action, object) => handleSend({ forceAction: action, forceObject: object })}
-            onAlternativeClick={(suggestion) => setUserInput(suggestion)}
-            activeModel={activeModel}
-            onModelChange={setActiveModel}
-            editHistory={editHistory}
-            currentEditIndex={currentEditIndex}
-            onJumpToHistory={jumpToEdit}
-          />
-          
-          <InputArea 
-            userInput={userInput}
-            setUserInput={setUserInput}
-            onSend={() => handleSend()}
-            disabled={!imageUrl || isProcessing || isAutonomousMode}
-            placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
-            onReferenceUpload={handleReferenceUpload}
-            referenceImagePreview={referenceImage}
-            onClearReference={() => { setReferenceImage(null); setReferenceDesc(null); }}
-            // Pass hierarchy handlers
-            selectedObject={selectedObject}
-            onObjectUpdate={setSelectedObject}
-            onClearSelection={() => {
-              setSelectedObject(null);
-              resetPins();
-            }}
-          />
+        <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl">
+            <ReasoningPanel 
+              logs={logs}
+              status={isGeneratingRender ? 'Generating Visualization...' : status}
+              isProcessing={isProcessing || isGeneratingRender}
+              onForceExecute={(action, object) => handleSend({ forceAction: action, forceObject: object })}
+              onAlternativeClick={(suggestion) => setUserInput(suggestion)}
+              activeModel={activeModel}
+              onModelChange={setActiveModel}
+              editHistory={editHistory}
+              currentEditIndex={currentEditIndex}
+              onJumpToHistory={jumpToEdit}
+            />
+            
+            <InputArea 
+              userInput={userInput}
+              setUserInput={setUserInput}
+              onSend={() => handleSend()}
+              disabled={!imageUrl || isProcessing || isAutonomousMode || isGeneratingRender}
+              placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
+              onReferenceUpload={handleReferenceUpload}
+              referenceImagePreview={referenceImage}
+              onClearReference={() => { setReferenceImage(null); setReferenceDesc(null); }}
+              // Pass hierarchy handlers
+              selectedObject={selectedObject}
+              onObjectUpdate={setSelectedObject}
+              onClearSelection={() => {
+                setSelectedObject(null);
+                resetPins();
+              }}
+            />
+        </div>
+
+        {/* Insights Panel */}
+        <RoomInsightsPanel 
+          roomAnalysis={roomAnalysis}
+          isVisible={showInsights}
+          onClose={() => setShowInsights(false)}
+          status={status}
+          mode={(isProcessing || isGeneratingRender) ? 'waiting' : 'viewing'}
+        />
+
+        {/* Autonomous Modal */}
+        <AutonomousAgentModal />
       </div>
-
-      {/* Insights Panel */}
-      <RoomInsightsPanel 
-        roomAnalysis={roomAnalysis}
-        isVisible={showInsights}
-        onClose={() => setShowInsights(false)}
-        status={status}
-        mode={isProcessing ? 'waiting' : 'viewing'}
-      />
-
-      {/* Autonomous Modal */}
-      <AutonomousAgentModal
-        isOpen={isModalOpen}
-        onClose={closeModal}
-        agentState={agentState}
-        onStart={handleStartAutonomous}
-        onPause={pauseAgent}
-        onResume={resumeAgent}
-        onStop={stopAgent}
-        disabled={!imageUrl || (isProcessing && !isAutonomousMode)}
-        analyses={analyses}
-        onExportReport={exportAnalysisReport}
-        onExportImages={exportImages}
-      />
-    </div>
+    </AutonomousProvider>
   );
 };
 

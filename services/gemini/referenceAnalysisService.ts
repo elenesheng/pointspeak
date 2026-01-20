@@ -1,7 +1,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, generateCacheKey } from "../../utils/apiUtils";
+import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
 
 /**
  * Analyzes a reference image to extract material, texture, and pattern information.
@@ -51,15 +51,16 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
       return text;
     };
 
-    try {
-      return await runRefAnalysis(GEMINI_CONFIG.MODELS.REASONING);
-    } catch (error) {
-       console.warn("Reference Analysis Pro failed, falling back to Flash...", error);
-       try {
-         return await runRefAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK);
-       } catch (fallbackError) {
-         return "Object: Unknown. Material: Custom. Texture: Inferred from image. Color: As seen.";
-       }
-    }
+    return runWithFallback(
+      () => runRefAnalysis(GEMINI_CONFIG.MODELS.REASONING),
+      async () => {
+        try {
+          return await runRefAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK);
+        } catch (fallbackError) {
+          return "Object: Unknown. Material: Custom. Texture: Inferred from image. Color: As seen.";
+        }
+      },
+      "Reference Analysis"
+    );
   }, cacheKey);
 };

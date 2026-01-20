@@ -3,7 +3,7 @@ import React from 'react';
 import { ReasoningLog } from '../../types/ui.types';
 import { 
   CheckCircle2, AlertCircle, Map, Target, Cpu, ShieldCheck, ShieldAlert,
-  Eraser, Move, Palette, Sparkles, Activity, CornerDownRight, Zap
+  Eraser, Move, Palette, Sparkles, Activity, CornerDownRight, Zap, Lightbulb
 } from 'lucide-react';
 
 interface LogEntryProps {
@@ -20,7 +20,7 @@ export const LogEntry: React.FC<LogEntryProps> = ({ log, onForceExecute, onAlter
       case 'success': return <CheckCircle2 className="w-4 h-4 text-emerald-500" />;
       case 'error': return <AlertCircle className="w-4 h-4 text-rose-500" />;
       case 'analysis': return <Map className="w-4 h-4 text-indigo-400" />;
-      case 'validation': return log.metadata?.valid ? <ShieldCheck className="w-4 h-4 text-emerald-400" /> : <ShieldAlert className="w-4 h-4 text-rose-400" />;
+      case 'validation': return log.metadata?.valid ? <ShieldCheck className="w-4 h-4 text-emerald-400" /> : <Lightbulb className="w-4 h-4 text-amber-400" />;
       case 'intent':
         const op = log.metadata?.operation_type;
         if (op === 'REMOVE') return <Eraser className="w-4 h-4 text-rose-400" />;
@@ -36,7 +36,9 @@ export const LogEntry: React.FC<LogEntryProps> = ({ log, onForceExecute, onAlter
       <div className="mt-1">{getIcon()}</div>
       <div className="flex-1">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">{log.type}</span>
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+            {log.type === 'validation' && !log.metadata?.valid ? 'Suggestion' : log.type}
+          </span>
           <span className="text-[10px] font-mono text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity">
             {log.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
           </span>
@@ -90,44 +92,51 @@ export const LogEntry: React.FC<LogEntryProps> = ({ log, onForceExecute, onAlter
               </div>
             </div>
         ) : log.type === 'validation' && log.metadata && !log.metadata.valid ? (
-            <div className="rounded-xl p-4 border shadow-xl bg-rose-500/10 border-rose-500/20">
-               <h4 className="text-sm font-bold mb-3 flex items-center gap-2 text-rose-300">
-                  <ShieldAlert className="w-4 h-4" /> {log.content}
+            <div className="rounded-xl p-4 border shadow-xl bg-amber-500/10 border-amber-500/20">
+               <h4 className="text-sm font-bold mb-3 flex items-center gap-2 text-amber-300">
+                  🚫 Can't do that yet
                </h4>
+               <p className="text-xs text-amber-200/90 mb-3 leading-relaxed">
+                  The requested change might conflict with room constraints (e.g., blocking a doorway or overlapping solid objects).
+               </p>
                <div className="space-y-3">
-                 <div className="space-y-1.5">
+                 <div className="space-y-1.5 bg-black/20 p-3 rounded-lg">
                    {log.metadata.warnings.map((w: string, i: number) => (
-                     <p key={i} className="text-xs text-rose-200/80 flex items-start gap-2">
-                       <span className="mt-1 w-1 h-1 rounded-full bg-rose-500 shrink-0" />
+                     <p key={i} className="text-xs text-amber-200/80 flex items-start gap-2">
+                       <span className="mt-1 w-1 h-1 rounded-full bg-amber-500 shrink-0" />
                        {w}
                      </p>
                    ))}
                  </div>
-                 {log.metadata.canForce && onForceExecute && (
-                   <div className="pt-3 mt-3 border-t border-rose-500/20">
-                     <button 
-                       onClick={() => onForceExecute(log.metadata.forceAction, log.metadata.forceObject)}
-                       className="flex items-center gap-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 px-3 py-1.5 rounded-lg text-xs font-bold transition-all w-full justify-center shadow-lg shadow-rose-900/20 group"
-                     >
-                       <Zap className="w-3.5 h-3.5 group-hover:text-white transition-colors" />
-                       ⚠️ Ignore Warnings & Execute
-                     </button>
-                   </div>
-                 )}
+                 
                  {log.metadata.alternative_suggestion && onAlternativeClick && (
-                    <div className="pt-3 border-t border-rose-500/20">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Safe Alternative Suggestion</p>
+                    <div className="pt-2">
+                      <p className="text-[10px] font-bold text-amber-400/80 uppercase mb-2 flex items-center gap-1">
+                        <Lightbulb className="w-3 h-3" /> Try instead:
+                      </p>
                       <button 
                         onClick={() => onAlternativeClick(log.metadata.alternative_suggestion!)}
-                        className="w-full flex items-center gap-3 p-3 bg-slate-900 rounded-lg border border-slate-800 text-left hover:border-indigo-500/50 transition-colors group"
+                        className="w-full flex items-center gap-3 p-3 bg-amber-900/20 rounded-lg border border-amber-500/30 text-left hover:bg-amber-900/30 hover:border-amber-400/50 transition-all group"
                       >
-                        <CornerDownRight className="w-3.5 h-3.5 text-indigo-400" />
-                        <span className="text-xs text-slate-300 group-hover:text-white transition-colors">
+                        <CornerDownRight className="w-3.5 h-3.5 text-amber-400 group-hover:translate-x-1 transition-transform" />
+                        <span className="text-xs text-amber-100 group-hover:text-white transition-colors font-medium">
                           {log.metadata.alternative_suggestion}
                         </span>
                       </button>
                     </div>
                   )}
+
+                 {log.metadata.canForce && onForceExecute && (
+                   <div className="pt-2 border-t border-amber-500/20 mt-2">
+                     <button 
+                       onClick={() => onForceExecute(log.metadata.forceAction, log.metadata.forceObject)}
+                       className="flex items-center gap-2 text-amber-500/70 hover:text-amber-400 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all w-full justify-center group"
+                     >
+                       <Zap className="w-3 h-3" />
+                       Ignore warnings & try anyway
+                     </button>
+                   </div>
+                 )}
                </div>
             </div>
         ) : (

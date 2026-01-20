@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { IntentTranslation } from "../../types/ai.types";
 import { IdentifiedObject, DetailedRoomAnalysis, Coordinate } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry } from "../../utils/apiUtils";
+import { getApiKey, withSmartRetry, runWithFallback } from "../../utils/apiUtils";
 
 export const translateIntentWithSpatialAwareness = async (
   base64Image: string,
@@ -68,10 +68,10 @@ export const translateIntentWithSpatialAwareness = async (
   };
 
   return withSmartRetry(async () => {
-    try {
-      return await generate(GEMINI_CONFIG.MODELS.REASONING);
-    } catch (error: any) {
-      return await generate(GEMINI_CONFIG.MODELS.REASONING_FALLBACK);
-    }
+    return runWithFallback(
+      () => generate(GEMINI_CONFIG.MODELS.REASONING),
+      () => generate(GEMINI_CONFIG.MODELS.REASONING_FALLBACK),
+      "Intent Parsing"
+    );
   });
 };

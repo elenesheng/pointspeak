@@ -1,12 +1,17 @@
 
 import { GEMINI_CONFIG } from '../config/gemini.config';
 
-const cache = new Map<string, { data: any; timestamp: number }>();
+interface CacheEntry {
+  data: unknown;
+  timestamp: number;
+}
+
+const cache = new Map<string, CacheEntry>();
 
 /**
  * Generates a cache key from arguments.
  */
-export const generateCacheKey = (prefix: string, ...args: any[]): string => {
+export const generateCacheKey = (prefix: string, ...args: unknown[]): string => {
   return `${prefix}_${JSON.stringify(args)}`;
 };
 
@@ -52,6 +57,27 @@ export async function withSmartRetry<T>(
   }
 
   throw lastError;
+}
+
+/**
+ * Executes a primary function, failing over to a secondary function on error.
+ */
+export async function runWithFallback<T>(
+  primaryFn: () => Promise<T>,
+  fallbackFn: () => Promise<T>,
+  contextLabel: string = "Operation"
+): Promise<T> {
+  try {
+    return await primaryFn();
+  } catch (error) {
+    console.warn(`${contextLabel} primary model failed, falling back...`, error);
+    try {
+      return await fallbackFn();
+    } catch (fallbackError) {
+      console.error(`${contextLabel} fallback also failed.`, fallbackError);
+      throw fallbackError;
+    }
+  }
 }
 
 export const getApiKey = () => process.env.API_KEY || '';

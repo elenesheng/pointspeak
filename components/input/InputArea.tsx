@@ -1,6 +1,6 @@
 
 import React, { useRef } from 'react';
-import { Send, ImagePlus, X, Layers, Box, Globe, Minimize2 } from 'lucide-react';
+import { Send, ImagePlus, X, Layers, Box, Globe, Minimize2, Info } from 'lucide-react';
 import { IdentifiedObject } from '../../types/spatial.types';
 
 interface InputAreaProps {
@@ -29,13 +29,6 @@ export const InputArea: React.FC<InputAreaProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0] && onReferenceUpload) {
       onReferenceUpload(e.target.files[0]);
-      
-      // Auto-populate input based on selection state with precise syntax
-      if (selectedObject) {
-         setUserInput(`Change ${selectedObject.name} with ${selectedObject.name} from selected image`);
-      } else {
-         setUserInput(`Change the room style with style from selected image`);
-      }
     }
   };
 
@@ -151,9 +144,20 @@ export const InputArea: React.FC<InputAreaProps> = ({
       </div>
 
       <div className="flex items-center justify-between mt-4">
-          <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest">
-            Spatial Reasoning Engine v3.0 PRO
-          </p>
+          <div className="flex items-center gap-1.5 group cursor-help relative">
+             <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest group-hover:text-indigo-400 transition-colors">
+               Powered by Gemini multimodal reasoning
+             </p>
+             <Info className="w-3 h-3 text-slate-700 group-hover:text-indigo-400 transition-colors" />
+             
+             {/* Tooltip */}
+             <div className="absolute bottom-full left-0 mb-2 w-64 p-3 bg-slate-800 border border-slate-700 rounded-xl shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                   Under the hood, the system understands objects, space, and design style before editing. It builds a 3D mental model of your room to ensure realistic results.
+                </p>
+             </div>
+          </div>
+          
           <div className="flex gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
             <div className="w-1.5 h-1.5 rounded-full bg-slate-700"></div>

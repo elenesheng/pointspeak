@@ -2,7 +2,7 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { DetailedRoomAnalysis, RoomInsight } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, generateCacheKey } from "../../utils/apiUtils";
+import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
 
 /**
  * STRICT SCHEMA DEFINITIONS
@@ -123,12 +123,11 @@ export const analyzeRoomSpace = async (base64Image: string): Promise<DetailedRoo
       return parsed as DetailedRoomAnalysis;
     };
 
-    try {
-      return await runAnalysis(GEMINI_CONFIG.MODELS.REASONING);
-    } catch (error) {
-      console.warn("Room Analysis Pro failed, retrying with fallback...", error);
-      return await runAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK);
-    }
+    return runWithFallback(
+      () => runAnalysis(GEMINI_CONFIG.MODELS.REASONING),
+      () => runAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK),
+      "Room Analysis"
+    );
   }, cacheKey);
 };
 
