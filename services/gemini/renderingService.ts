@@ -30,9 +30,16 @@ const analyzeLayout = async (ai: GoogleGenAI, planBase64: string): Promise<strin
   - "Right Wall" = Right side.
   - "Front" = Bottom of plan (closest to viewer).
 
+  ROOM TYPE INFERENCE:
+  - If Bed, Kitchen, and Sofa appear in the same continuous space -> Detect as "STUDIO".
+  - Otherwise, label as Bedroom, Living Room, etc.
+
   ANALYSIS STEPS:
   1. Identify the "Back Wall" (Top of plan).
-  2. For each major object (Bed, Toilet, Tub, Sofa, Kitchen Counter), determine:
+  2. WINDOW DETECTION: Look for thin gaps or double lines along exterior walls. 
+     - IF FOUND: Output MUST include Count (e.g., 1, 2), Wall (Left/Right/Back), and Width (Small/Medium/Large).
+  3. TV RULE: If no TV symbol is clearly detected, DO NOT invent one.
+  4. For each major object (Bed, Toilet, Tub, Sofa, Kitchen Counter), determine:
      - ANCHOR: Which wall is it touching?
      - DEPTH: Is it in the Back (Top), Middle, or Front (Bottom)?
      - ALIGNMENT: Centered, Corner, or distributed?
@@ -41,17 +48,19 @@ const analyzeLayout = async (ai: GoogleGenAI, planBase64: string): Promise<strin
   - Large Oval (> 1.5m) = BATHTUB.
   - Small Oval/Circle (< 0.6m) = SINK.
   - Square with X = SHOWER.
-  - Small Circle = STOOL or ROUND TABLE.
 
   OUTPUT FORMAT:
-  "SYMBOLIC MAP:
-  - [Object] | [Anchor Wall] | [Depth] | [Notes]"
+  "ROOM TYPE: [Type]
+  SYMBOLIC MAP:
+  - [Object/Window] | [Anchor Wall] | [Depth] | [Notes]"
 
   Example:
-  "SYMBOLIC MAP:
-  - Bathtub | Back Wall | Back | Centered against wall
-  - Toilet | Left Wall | Front | Facing Center
-  - Vanity Sink | Right Wall | Middle | Elongated"
+  "ROOM TYPE: STUDIO
+  SYMBOLIC MAP:
+  - Windows | Back Wall | Back | Two large openings
+  - Bed | Right Wall | Back | Headboard against wall
+  - Kitchenette | Left Wall | Middle | Small linear kitchen
+  - Sofa | Center | Front | Facing Back Wall"
   `;
 
   try {
@@ -65,10 +74,10 @@ const analyzeLayout = async (ai: GoogleGenAI, planBase64: string): Promise<strin
         },
         config: { temperature: 0.1 }
       });
-      return response.text || "Symbolic Map: Standard room layout.";
+      return response.text || "Room Type: Standard\nSymbolic Map: Standard room layout.";
   } catch (e) {
       console.warn("Layout analysis failed, using default.");
-      return "Symbolic Map: Standard room layout.";
+      return "Room Type: Standard\nSymbolic Map: Standard room layout.";
   }
 };
 
@@ -150,6 +159,38 @@ const applyStylePass = async (
   - "Left" and "Right" are from the CAMERA viewpoint (Viewer's Left/Right).
   - "Back Wall" is the wall furthest from the camera.
   - "Front" is closest to the camera.
+
+  ABSOLUTE SCALE ANCHOR (CRITICAL):
+  - A standard bed is approximately 2 meters long.
+  - A standard bathtub is approximately 1.6–1.8 meters long.
+  - Use these as real-world scale references to size the room.
+  - Walls and room proportions must be consistent with these dimensions.
+
+  SCALE & COMPOSITION RULES:
+  - Preserve correct room scale. 
+  - If multiple large furniture items compete for space: Place secondary items partially out of frame (crop them) rather than shrinking them.
+  - DO NOT SHRINK furniture to fit.
+
+  FURNITURE PRIORITY (CONSTRAINT MANAGEMENT):
+  - Primary (Must Include): Bed, Sofa, Bathtub, Kitchen Counters.
+  - Secondary (Crop if needed): Tables, Desks, Dressers.
+  - Tertiary (Omit if tight): Chairs, Decor, Plants, Nightstands.
+  - RULE: If space is constrained, omit Tertiary items and crop Secondary items. Never shrink Primary items.
+
+  STUDIO RULES (If Room Type is STUDIO):
+  - Do NOT subdivide space with imaginary walls.
+  - Use zoning via furniture only (e.g. rug, sofa back).
+  - Maintain open-plan feeling.
+
+  WINDOW RULES (STRICT):
+  - Windows may ONLY be added if explicitly listed in the Symbolic Map.
+  - Place them on the specified wall.
+  - Do NOT add windows otherwise.
+  - WINDOW GEOMETRY: Windows are voids cut into the wall plane. Do NOT change wall position or thickness. Windows must be flush with the wall surface.
+
+  TV PLACEMENT RULE:
+  - Only place a TV if explicitly mentioned in the Symbolic Map.
+  - Otherwise, omit it.
 
   ORIENTATION RULES (STRICT):
   - Beds: Headboard must be against the Anchor Wall.
