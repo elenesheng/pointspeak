@@ -1,5 +1,5 @@
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { AppStatus, ReasoningLogType, EditHistoryEntry } from '../types/ui.types';
 import { DetailedRoomAnalysis, IdentifiedObject, Coordinate } from '../types/spatial.types';
 import { IntentTranslation } from '../types/ai.types';
@@ -103,9 +103,16 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const [currentWorkingImage, setCurrentWorkingImage] = useState<string | null>(null);
 
   const timerRef = useRef<number | null>(null);
+  
+  // OPERATION ID REF - Critical for invalidation
+  const operationIdRef = useRef<number>(0);
 
   // 1. Initial Room Scan + Object Detection
   const performInitialScan = async (base64: string) => {
+    // Increment Op ID to invalidate previous runs
+    operationIdRef.current += 1;
+    const currentOpId = operationIdRef.current;
+
     setStatus('Scanning Room...');
     addLog('Initiating architectural deep scan & object detection...', 'thought');
     setIsProcessing(true);
@@ -116,6 +123,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       operation: 'Original',
       description: 'Original Upload'
     };
+    
+    // Set immediate UI state
     setEditHistory([initialEntry]);
     setCurrentEditIndex(0);
     setCurrentWorkingImage(base64);
@@ -133,6 +142,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         scanImageForObjects(base64)
       ]);
 
+      // STALE CHECK
+      if (currentOpId !== operationIdRef.current) {
+        console.log(`[Abort] Scan operation ${currentOpId} aborted.`);
+        return; 
+      }
+
       setRoomAnalysis(analysis);
       setScannedObjects(objects);
       
@@ -140,6 +155,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       addLog(`✓ Detected ${objects.length} interactable objects`, 'success');
 
     } catch (err) {
+      if (currentOpId !== operationIdRef.current) return;
+      
       const appErr = mapApiError(err);
       console.warn("Room scan failed or timed out:", appErr);
       
@@ -153,18 +170,26 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       });
       addLog('Room analysis skipped (timeout/error), but ready for commands.', 'error');
     } finally {
-      setStatus('Ready');
-      setIsProcessing(false);
+      if (currentOpId === operationIdRef.current) {
+        setStatus('Ready');
+        setIsProcessing(false);
+      }
     }
   };
 
   // 2. Identify Object (Hit Test with Fuzzy Fallback)
   const identifyObjectAtLocation = async (base64: string, x: number, y: number) => {
+    operationIdRef.current += 1;
+    const currentOpId = operationIdRef.current;
+
     setStatus('Analyzing Source...');
     setIsProcessing(true);
     
     // Simulate short processing time for UI feedback
     await new Promise(r => setTimeout(r, 50));
+
+    // Stale Check
+    if (currentOpId !== operationIdRef.current) return;
 
     // --- PHASE 1: PRECISE HIT TEST ---
     let candidates = scannedObjects.filter(obj => {
@@ -177,7 +202,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     candidates.sort((a, b) => {
         if (!a.box_2d || !b.box_2d) return 0;
         const areaA = (a.box_2d[2] - a.box_2d[0]) * (a.box_2d[3] - a.box_2d[1]);
-        const areaB = (b.box_2d[2] - b.box_2d[0]) * (b.box_2d[3] - b.box_2d[1]);
+        const areaB = (b.box_2d![2] - b.box_2d![0]) * (b.box_2d![3] - b.box_2d![1]);
         return areaA - areaB;
     });
 
@@ -205,8 +230,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           const centerA_y = (a.box_2d[0] + a.box_2d[2]) / 2;
           const distA = Math.sqrt(Math.pow(x - centerA_x, 2) + Math.pow(y - centerA_y, 2));
 
-          const centerB_x = (b.box_2d[1] + b.box_2d[3]) / 2;
-          const centerB_y = (b.box_2d[0] + b.box_2d[2]) / 2;
+          const centerB_x = (b.box_2d![1] + b.box_2d![3]) / 2;
+          const centerB_y = (b.box_2d![0] + b.box_2d![2]) / 2;
           const distB = Math.sqrt(Math.pow(x - centerB_x, 2) + Math.pow(y - centerB_y, 2));
           
           return distA - distB;
@@ -235,12 +260,17 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
        addLog('No specific object detected at click. Using generic selection.', 'thought');
     }
     
-    setStatus('Ready');
-    setIsProcessing(false);
+    if (currentOpId === operationIdRef.current) {
+       setStatus('Ready');
+       setIsProcessing(false);
+    }
   };
 
   // 3. Analyze Reference
   const analyzeReference = async (referenceBase64: string): Promise<string | null> => {
+    operationIdRef.current += 1;
+    const currentOpId = operationIdRef.current;
+    
     setIsProcessing(true); // Lock UI
     setStatus('Analyzing Reference...');
     addLog('Analyzing reference material...', 'thought');
@@ -248,15 +278,21 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
 
     try {
       const desc = await analyzeReferenceImage(referenceBase64);
+      
+      if (currentOpId !== operationIdRef.current) return null;
+      
       setActiveRefDesc(desc);
       addLog(`✓ Reference analyzed: ${desc}`, 'success');
       return desc;
     } catch (err) {
+      if (currentOpId !== operationIdRef.current) return null;
       addLog('Failed to analyze reference image.', 'error');
       return null;
     } finally {
-      setStatus('Ready');
-      setIsProcessing(false); // Unlock UI
+      if (currentOpId === operationIdRef.current) {
+        setStatus('Ready');
+        setIsProcessing(false); // Unlock UI
+      }
     }
   };
 
@@ -269,6 +305,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     referenceDescription?: string,
     referenceImageBase64?: string
   ): Promise<string | undefined> => {
+    operationIdRef.current += 1;
+    const currentOpId = operationIdRef.current;
+
     const workingBase64 = inputBase64 || currentWorkingImage;
     if (!roomAnalysis || !workingBase64) {
       addLog("No active image to edit. Please upload a photo.", 'error');
@@ -341,6 +380,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         }
       }
 
+      // Stale check
+      if (currentOpId !== operationIdRef.current) return;
+
       // Reasoning
       if (forceOverride && overrideData) {
         translation = overrideData.forceAction;
@@ -354,6 +396,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           targetObject,
           refDescToUse || undefined
         );
+        
+        if (currentOpId !== operationIdRef.current) return;
 
         if (translation.validation && !translation.validation.valid) {
              addLog('⚠️ SPATIAL WARNING: ' + translation.validation.warnings.join(', '), 'validation', {
@@ -386,6 +430,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         refDescToUse || undefined,
         refImageToUse
       );
+      
+      if (currentOpId !== operationIdRef.current) return;
 
       const pureBase64 = editedImageBase64.startsWith('data:') ? editedImageBase64.split(',')[1] : editedImageBase64;
       const displayImage = editedImageBase64.startsWith('data:') ? editedImageBase64 : `data:image/jpeg;base64,${editedImageBase64}`;
@@ -418,6 +464,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           scanImageForObjects(pureBase64)
         ]);
         
+        if (currentOpId !== operationIdRef.current) return;
+        
         setRoomAnalysis(prev => prev ? { ...prev, insights: newInsights } : null);
         addLog('💡 Insights updated', 'thought');
         
@@ -430,16 +478,19 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       return pureBase64; // Return for Autonomous Agent chaining
 
     } catch (err) {
+      if (currentOpId !== operationIdRef.current) return;
       const appErr = mapApiError(err);
       addLog(`Failed: ${appErr.message}`, 'error');
       return undefined;
     } finally {
-      setActiveRefImage(null);
-      setActiveRefDesc(null);
-      setStatus('Ready');
-      setIsProcessing(false);
-      setEstimatedTime(0);
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (currentOpId === operationIdRef.current) {
+        setActiveRefImage(null);
+        setActiveRefDesc(null);
+        setStatus('Ready');
+        setIsProcessing(false);
+        setEstimatedTime(0);
+        if (timerRef.current) clearInterval(timerRef.current);
+      }
     }
   };
 
@@ -450,9 +501,14 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     setCurrentWorkingImage(entry.base64);
     setGeneratedImage(index === 0 ? null : `data:image/jpeg;base64,${entry.base64}`);
     
-    // When jumping history, we should ideally re-scan that historical image
+    // Scan newly jumped image
+    operationIdRef.current += 1;
+    const currentOpId = operationIdRef.current;
+    
     scanImageForObjects(entry.base64).then(newObjects => {
-       setScannedObjects(newObjects);
+       if (currentOpId === operationIdRef.current) {
+          setScannedObjects(newObjects);
+       }
     });
 
     addLog(`↻ Jumped to state: ${entry.description}`, 'action');
@@ -463,6 +519,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const resetToOriginal = useCallback(() => jumpToEdit(0), [jumpToEdit]);
 
   const resetAgent = () => {
+    // CRITICAL: Invalidate all running operations
+    operationIdRef.current += 1;
+    
     setStatus('Idle');
     setRoomAnalysis(null);
     setSelectedObject(null);
@@ -474,6 +533,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     setActiveRefDesc(null);
     setEstimatedTime(0);
     setScannedObjects([]);
+    setIsProcessing(false);
+    if (timerRef.current) clearInterval(timerRef.current);
   };
 
   return {
@@ -499,6 +560,6 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     canUndo: currentEditIndex > 0,
     canRedo: currentEditIndex < editHistory.length - 1,
     estimatedTime, 
-    scannedObjects, // Exported for UI visualization
+    scannedObjects, 
   };
 };

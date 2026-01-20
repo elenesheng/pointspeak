@@ -23,37 +23,37 @@ const generateStructurePass = async (
   maskBase64: string
 ): Promise<string> => {
   const prompt = `
-  ROLE: 3D Architect.
-  TASK: Create a pure "Whitebox" clay render from this 2D Floor Plan.
+  ROLE: 3D Architect & Spatial Geometry Engine.
+  TASK: Generate a photorealistic INTERIOR PERSPECTIVE VIEW (Whitebox Clay Render) based on the floor plan.
   
-  INPUTS:
-  1. Floor Plan Image (Layout)
-  2. Structural Mask (White = Wall, Black = Void)
+  CRITICAL PERSPECTIVE RULES (NON-NEGOTIABLE):
+  1. VIEWPOINT: You are standing ON THE FLOOR inside the room. Camera height = 1.6m (Eye Level).
+  2. HORIZON: The horizon line must be in the CENTER of the image.
+  3. CEILING CHECK: You MUST see the ceiling in the top 20% of the image. If you don't see the ceiling, you are too high. LOWER THE CAMERA.
+  4. NO TOP-DOWN: Do not generate a map, plan, or isometric view. It must be a First-Person Photo.
 
-  STRICT CAMERA SETTINGS:
-  - HEIGHT: 1.6m (Eye Level). Standing ON THE FLOOR.
-  - PITCH: 0° (Looking straight forward).
-  - LENS: 16mm Wide Angle.
-  - COMPOSITION: The CEILING must be visible in the top 20%. The FLOOR must be visible in the bottom 20%.
-  - ERROR PREVENTION: If the image looks like a map or chart, YOU FAILED. It must look like a PHOTOGRAPH of a white room.
+  GEOMETRY DECODING RULES:
+  1. WALLS (Solid Lines):
+     - A SOLID BLACK LINE in the plan = A SOLID OPAQUE WALL from floor to ceiling.
+     - ABSOLUTELY NO WINDOWS ON SOLID LINES. If the line is black, the wall is solid.
+  
+  2. DOORS (Gaps):
+     - A break/gap in the black wall line = A DOORWAY or OPEN PASSAGE.
+     - Render this as an opening that touches the floor.
+  
+  3. WINDOWS (Specific Symbols):
+     - Only render a window if you see a THIN double line or a specific window symbol.
+     - If you are unsure, RENDER A SOLID WALL. Do not guess windows.
+  
+  4. FIXTURE RULES:
+     - Large Corner Square/Quadrant = SHOWER CABIN (Tall glass).
+     - Small Wall Oval = SINK (Waist height).
+     - Counters = Waist height boxes.
 
-  SYMBOL DECODING & GEOMETRY RULES:
-  1. WALLS: Extrude vertically from plan lines. Gaps are Doors/Windows.
-  2. SHOWER vs SINK (CRITICAL):
-     - Large Square/Quadrant with 'X' or circle = SHOWER CABIN. Render a TALL glass box (2m height).
-     - Small Oval/Rectangle on wall = SINK. Render a floating basin or vanity cabinet (0.9m height).
-  3. KITCHEN:
-     - Long rectangles along walls = COUNTERS. Render at 0.9m height. 
-     - Do not block doors with counters.
-  
-  PHYSICS:
-  - Floor exists. Ceiling exists.
-  - Furniture sits on floor.
-  
   OUTPUT STYLE:
   - Material: White Clay / Plaster.
-  - Lighting: Soft Ambient Occlusion (Grey shadows).
-  - NO TEXTURES. NO COLORS. JUST GEOMETRY.
+  - Lighting: Soft Ambient Occlusion.
+  - NO COLORS. NO TEXTURES. JUST FORM.
   `;
 
   const response = await ai.models.generateContent({
@@ -81,38 +81,25 @@ const applyStylePass = async (
   const whiteboxClean = whiteboxBase64.split(',')[1];
   
   const prompt = `
-  ROLE: Texture Artist / Material Painter.
-  TASK: Paint photorealistic materials onto the provided Whitebox 3D Render.
+  ROLE: Texture Projection Engine.
+  TASK: Apply photorealistic materials to the Input Whitebox.
 
-  INPUTS:
-  1. WHITEBOX IMAGE (Geometry Truth):
-     - This image dictates the EXACT SHAPE, POSITION, and LAYOUT of the room.
-     - You CANNOT change the walls, windows, doors, or furniture shapes.
-     - You CANNOT move the kitchen or bathroom fixtures.
-     - You MUST respect the Whitebox geometry 100%.
+  INPUT 1: WHITEBOX (THE GEOMETRY TRUTH)
+  - This image defines the PHYSICS of the world.
+  - If the Whitebox shows a solid wall, IT IS A SOLID WALL. Do not paint a window on it.
+  - If the Whitebox shows a door, keep it a door.
+  - IGNORE the Reference Image layout. ONLY use the Reference Image for colors/materials.
 
-  2. REFERENCE IMAGE (Style Palette ONLY):
-     - This is a MOOD BOARD. 
-     - IGNORE the layout of this image.
-     - IGNORE the furniture placement in this image.
-     - ONLY extract: Colors, Materials (e.g. "Marble", "Oak"), and Lighting vibe.
+  INPUT 2: REFERENCE (THE VIBE)
+  - Extract: "Wood floor", "Marble counter", "Beige walls".
+  - Apply these materials to the SHAPES found in Input 1.
 
-  3. USER TEXT: "${styleDescription}"
+  USER INSTRUCTION: "${styleDescription}"
 
-  INSTRUCTIONS:
-  1. LOCK GEOMETRY: Look at Input 1. If there is a blank wall, KEEP IT BLANK. Do not add windows just because the reference has them.
-  2. PAINT MATERIALS: 
-     - If the Whitebox shows a Shower Cabin -> Paint it with Glass/Chrome.
-     - If the Whitebox shows a Sink -> Paint it with Ceramic/Stone.
-     - If the Whitebox shows a Kitchen Counter -> Paint it with the material from the Reference (e.g. Marble), but KEEP THE SHAPE from the Whitebox.
-  3. INTELLIGENT MATERIAL LOGIC:
-     - Wet Zones (Shower/Tub): Use Tiles/Stone.
-     - Dry Zones (Living/Bed): Use Wood/Carpet/Paint.
-
-  NEGATIVE CONSTRAINTS (DO NOT DO THIS):
-  - DO NOT change the room layout.
-  - DO NOT add doors or windows that are not in the Whitebox.
-  - DO NOT clone the Reference Image's room.
+  STRICT MATERIAL LOGIC:
+  1. WET ZONES (Showers/Tubs): Must use TILES or STONE. Never use wood inside a shower.
+  2. DRY ZONES (Living/Bed): Use Wood, Carpet, or Paint.
+  3. NO HALLUCINATIONS: Do not add furniture that is not in the Whitebox.
 
   OUTPUT:
   - A photorealistic render that matches the Whitebox's SHAPE exactly, but wears the Reference's STYLE.
@@ -129,7 +116,7 @@ const applyStylePass = async (
   const response = await ai.models.generateContent({
     model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
     contents: { parts },
-    config: { temperature: 0.25 } // Low temp to prevent hallucination of new geometry
+    config: { temperature: 0.2 } // Low temp to prevent hallucination of new geometry
   });
 
   return extractBase64(response);
