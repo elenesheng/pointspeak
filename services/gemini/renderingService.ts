@@ -16,44 +16,94 @@ const extractBase64 = (response: any): string => {
     throw new Error("No image generated.");
 };
 
-// PASS 1: STRUCTURE GENERATION (Whitebox/Clay) - Single Wide Angle View
+// STEP 0: LAYOUT EXTRACTION (Plan -> Symbolic Spatial Map)
+// We convert 2D geometry into relative text anchors ("Left Wall", "Back Wall")
+// This allows Pass 2 to place furniture correctly without seeing the confusing 2D plan image.
+const analyzeLayout = async (ai: GoogleGenAI, planBase64: string): Promise<string> => {
+  const prompt = `
+  TASK: Analyze this 2D Floor Plan and generate a SYMBOLIC SPATIAL MAP for a 3D Perspective Render.
+  
+  PERSPECTIVE CONTEXT:
+  - Imagine standing at the "Bottom" (Entrance) of the plan, looking "Up" (Back).
+  - "Back Wall" = Top of plan.
+  - "Left Wall" = Left side.
+  - "Right Wall" = Right side.
+  - "Front" = Bottom of plan (closest to viewer).
+
+  ANALYSIS STEPS:
+  1. Identify the "Back Wall" (Top of plan).
+  2. For each major object (Bed, Toilet, Tub, Sofa, Kitchen Counter), determine:
+     - ANCHOR: Which wall is it touching?
+     - DEPTH: Is it in the Back (Top), Middle, or Front (Bottom)?
+     - ALIGNMENT: Centered, Corner, or distributed?
+
+  CRITICAL SIZE ANALYSIS:
+  - Large Oval (> 1.5m) = BATHTUB.
+  - Small Oval/Circle (< 0.6m) = SINK.
+  - Square with X = SHOWER.
+  - Small Circle = STOOL or ROUND TABLE.
+
+  OUTPUT FORMAT:
+  "SYMBOLIC MAP:
+  - [Object] | [Anchor Wall] | [Depth] | [Notes]"
+
+  Example:
+  "SYMBOLIC MAP:
+  - Bathtub | Back Wall | Back | Centered against wall
+  - Toilet | Left Wall | Front | Facing Center
+  - Vanity Sink | Right Wall | Middle | Elongated"
+  `;
+
+  try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_CONFIG.MODELS.REASONING_FALLBACK, // Use Flash for speed
+        contents: {
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: planBase64 } },
+            { text: prompt }
+          ]
+        },
+        config: { temperature: 0.1 }
+      });
+      return response.text || "Symbolic Map: Standard room layout.";
+  } catch (e) {
+      console.warn("Layout analysis failed, using default.");
+      return "Symbolic Map: Standard room layout.";
+  }
+};
+
+// PASS 1: STRUCTURE GENERATION (Whitebox/Clay) - Pure Geometry Extrusion
+// The MASK is the authority. The PLAN is only for scale hints.
 const generateStructurePass = async (
   ai: GoogleGenAI,
   planBase64: string,
   maskBase64: string
 ): Promise<string> => {
   const prompt = `
-  ROLE: 3D Architect & Spatial Geometry Engine.
-  TASK: Generate a photorealistic INTERIOR PERSPECTIVE VIEW (Whitebox Clay Render) based on the floor plan.
-  
-  CRITICAL PERSPECTIVE RULES (NON-NEGOTIABLE):
-  1. VIEWPOINT: You are standing ON THE FLOOR inside the room. Camera height = 1.6m (Eye Level).
-  2. HORIZON: The horizon line must be in the CENTER of the image.
-  3. CEILING CHECK: You MUST see the ceiling in the top 20% of the image. If you don't see the ceiling, you are too high. LOWER THE CAMERA.
-  4. NO TOP-DOWN: Do not generate a map, plan, or isometric view. It must be a First-Person Photo.
+  ROLE: 3D Renderer.
+  TASK: Convert the provided STRUCTURAL MASK into a simple 3D interior volume (Whitebox).
 
-  GEOMETRY DECODING RULES:
-  1. WALLS (Solid Lines):
-     - A SOLID BLACK LINE in the plan = A SOLID OPAQUE WALL from floor to ceiling.
-     - ABSOLUTELY NO WINDOWS ON SOLID LINES. If the line is black, the wall is solid.
-  
-  2. DOORS (Gaps):
-     - A break/gap in the black wall line = A DOORWAY or OPEN PASSAGE.
-     - Render this as an opening that touches the floor.
-  
-  3. WINDOWS (Specific Symbols):
-     - Only render a window if you see a THIN double line or a specific window symbol.
-     - If you are unsure, RENDER A SOLID WALL. Do not guess windows.
-  
-  4. FIXTURE RULES:
-     - Large Corner Square/Quadrant = SHOWER CABIN (Tall glass).
-     - Small Wall Oval = SINK (Waist height).
-     - Counters = Waist height boxes.
+  INPUTS:
+  - Floor Plan (Use ONLY for wall length proportions)
+  - Structural Mask (WHITE = Walls, BLACK = Empty Space) -> THIS IS THE AUTHORITY.
 
-  OUTPUT STYLE:
-  - Material: White Clay / Plaster.
-  - Lighting: Soft Ambient Occlusion.
-  - NO COLORS. NO TEXTURES. JUST FORM.
+  GEOMETRY RULES:
+  - Extrude white regions vertically to form walls.
+  - Wall height: ~2.7m.
+  - Do NOT invent new walls. Do NOT remove walls.
+  - Do NOT render furniture.
+  
+  CAMERA (CRITICAL):
+  - VIEW: Eye-Level Perspective (1.6m high).
+  - LENS: 18mm Wide Angle.
+  - LOOK: Straight into the room.
+  - REQUIREMENT: Floor and Ceiling must be visible.
+  - PERSPECTIVE: 3-Point perspective (verticals must be straight).
+
+  RENDER STYLE:
+  - White clay material.
+  - Soft ambient occlusion.
+  - Empty room shell only.
   `;
 
   const response = await ai.models.generateContent({
@@ -65,58 +115,73 @@ const generateStructurePass = async (
         { text: prompt }
       ]
     },
-    config: { temperature: 0.1 } // Rigid adherence to plan
+    config: { temperature: 0.1 }
   });
   
   return extractBase64(response);
 };
 
-// PASS 2: STYLE APPLICATION - Texture Projection
+// PASS 2: STYLE & LAYOUT APPLICATION
+// Inputs: Whitebox (Geometry) + Symbolic Map (Layout) + Reference (Style)
+// We DO NOT pass the plan image here to prevent perspective drift.
 const applyStylePass = async (
   ai: GoogleGenAI,
   whiteboxBase64: string,
+  symbolicMap: string,
   referenceBase64: string | null,
   styleDescription: string
 ): Promise<string> => {
   const whiteboxClean = whiteboxBase64.split(',')[1];
   
   const prompt = `
-  ROLE: Texture Projection Engine.
-  TASK: Apply photorealistic materials to the Input Whitebox.
+  ROLE: Interior Designer.
+  TASK: Furnish and Texture the provided Whitebox shell using the Symbolic Map.
 
-  INPUT 1: WHITEBOX (THE GEOMETRY TRUTH)
-  - This image defines the PHYSICS of the world.
-  - If the Whitebox shows a solid wall, IT IS A SOLID WALL. Do not paint a window on it.
-  - If the Whitebox shows a door, keep it a door.
-  - IGNORE the Reference Image layout. ONLY use the Reference Image for colors/materials.
+  INPUT 1: WHITEBOX RENDER (Geometry Authority)
+  - This image defines the 3D Perspective, Room Shape, and Wall positions.
+  - DO NOT CHANGE THE CAMERA ANGLE.
+  - DO NOT MOVE WALLS.
 
-  INPUT 2: REFERENCE (THE VIBE)
-  - Extract: "Wood floor", "Marble counter", "Beige walls".
-  - Apply these materials to the SHAPES found in Input 1.
+  INPUT 2: SYMBOLIC SPATIAL MAP (Layout Intent)
+  - "${symbolicMap}"
+  - Use this text map to place 3D furniture models relative to the Whitebox walls.
+  
+  CAMERA & SPATIAL RULES:
+  - "Left" and "Right" are from the CAMERA viewpoint (Viewer's Left/Right).
+  - "Back Wall" is the wall furthest from the camera.
+  - "Front" is closest to the camera.
 
-  USER INSTRUCTION: "${styleDescription}"
+  ORIENTATION RULES (STRICT):
+  - Beds: Headboard must be against the Anchor Wall.
+  - Bathtubs: Long side parallel to the Anchor Wall.
+  - Sofas: Back against wall, facing center of room.
+  - Toilets: Back against wall, facing into room.
+  - Kitchen Counters: Flat against wall.
 
-  STRICT MATERIAL LOGIC:
-  1. WET ZONES (Showers/Tubs): Must use TILES or STONE. Never use wood inside a shower.
-  2. DRY ZONES (Living/Bed): Use Wood, Carpet, or Paint.
-  3. NO HALLUCINATIONS: Do not add furniture that is not in the Whitebox.
+  INPUT 3: STYLE REFERENCE
+  - User Goal: "${styleDescription}"
+  - Apply photorealistic materials/lighting matching this style.
 
-  OUTPUT:
-  - A photorealistic render that matches the Whitebox's SHAPE exactly, but wears the Reference's STYLE.
+  EXECUTION:
+  1. Respect the Whitebox geometry (Walls/Floor/Ceiling) implicitly.
+  2. Populate the room with furniture defined in the Symbolic Map.
+  3. Render in high fidelity.
   `;
 
   const parts: any[] = [
-    { inlineData: { mimeType: 'image/jpeg', data: whiteboxClean } }
+    { inlineData: { mimeType: 'image/jpeg', data: whiteboxClean } },
+    { text: prompt }
   ];
+  
+  // Only add reference if it exists
   if (referenceBase64) {
-    parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
+    parts.splice(1, 0, { inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
   }
-  parts.push({ text: prompt });
 
   const response = await ai.models.generateContent({
     model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
     contents: { parts },
-    config: { temperature: 0.2 } // Low temp to prevent hallucination of new geometry
+    config: { temperature: 0.3 }
   });
 
   return extractBase64(response);
@@ -143,24 +208,28 @@ export const generateMultiAngleRender = async (
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
   
-  console.log("[Render] Starting Single-View Generation...");
+  console.log("[Render] Starting Pipeline...");
   
   try {
-      // 1. Generate Single Wide-Angle Whitebox
-      // This establishes the absolute truth for geometry.
+      // 1. Analyze Layout (Plan -> Text Map)
+      console.log("[Render] Generating Symbolic Spatial Map...");
+      const symbolicMap = await analyzeLayout(ai, planBase64);
+      console.log("[Render] Map:", symbolicMap);
+
+      // 2. Generate Structure Whitebox (Geometry)
       console.log("[Render] Generating Structure Whitebox...");
       const structureWhitebox = await generateStructurePass(ai, planBase64, maskBase64);
       
-      // 2. Apply Style to the Whitebox
-      console.log("[Render] Applying Style...");
+      // 3. Apply Style & Furniture (Text Map -> Final Image)
+      console.log("[Render] Applying Style & Furniture...");
       const finalImage = await applyStylePass(
         ai, 
-        structureWhitebox, 
+        structureWhitebox,
+        symbolicMap, // Passing TEXT instead of IMAGE
         referenceBase64, 
         styleDescription
       );
       
-      // Return single image in array
       return [finalImage];
 
   } catch (e) {
