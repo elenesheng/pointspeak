@@ -1,6 +1,6 @@
 
 import React, { useRef } from 'react';
-import { Send, ImagePlus, X, Layers, Box, Globe, Minimize2, Info } from 'lucide-react';
+import { Send, ImagePlus, X, Layers, Box, Globe, Minimize2, Info, Sparkles, ChevronDown } from 'lucide-react';
 import { IdentifiedObject } from '../../types/spatial.types';
 
 interface InputAreaProps {
@@ -17,12 +17,19 @@ interface InputAreaProps {
   selectedObject: IdentifiedObject | null;
   onObjectUpdate: (obj: IdentifiedObject) => void;
   onClearSelection?: () => void;
+  
+  // New visualize prop
+  onVisualize?: (object: IdentifiedObject, prompt: string) => void;
+
+  // New detected objects for room selection
+  detectedObjects?: IdentifiedObject[];
 }
 
 export const InputArea: React.FC<InputAreaProps> = ({ 
   userInput, setUserInput, onSend, disabled, placeholder, 
   onReferenceUpload, referenceImagePreview, onClearReference,
-  selectedObject, onObjectUpdate, onClearSelection
+  selectedObject, onObjectUpdate, onClearSelection,
+  onVisualize, detectedObjects = []
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +41,9 @@ export const InputArea: React.FC<InputAreaProps> = ({
 
   const hasHierarchy = selectedObject && selectedObject.specific_part && selectedObject.whole_object;
   const isWholeSelected = selectedObject?.name === selectedObject?.whole_object?.name;
+  
+  // Filter for rooms/structure to populate dropdown
+  const rooms = detectedObjects.filter(o => o.category === 'Structure');
 
   const toggleHierarchy = (useWhole: boolean) => {
     if (!selectedObject || !selectedObject.whole_object || !selectedObject.specific_part) return;
@@ -93,9 +103,32 @@ export const InputArea: React.FC<InputAreaProps> = ({
              </button>
            </div>
          ) : (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-               <Globe className="w-3 h-3" />
-               Global Room Context
+            <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                   <Globe className="w-3 h-3" />
+                   Global Room Context
+                </div>
+                
+                {rooms.length > 0 && (
+                   <div className="h-6 w-px bg-slate-800"></div> 
+                )}
+
+                {rooms.length > 0 && (
+                  <div className="relative group">
+                    <select 
+                        onChange={(e) => {
+                            const r = rooms.find(room => room.id === e.target.value);
+                            if(r) onObjectUpdate(r);
+                        }}
+                        className="appearance-none bg-slate-800 border border-slate-700 hover:border-indigo-500 text-slate-300 text-xs rounded-lg pl-3 pr-8 py-1.5 outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer transition-all"
+                        value=""
+                    >
+                        <option value="" disabled>Select a room...</option>
+                        {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                    <ChevronDown className="w-3 h-3 text-slate-500 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-indigo-400" />
+                  </div>
+                )}
             </div>
          )}
       </div>
@@ -132,6 +165,19 @@ export const InputArea: React.FC<InputAreaProps> = ({
              <ImagePlus className="w-4 h-4" />
            </button>
            
+           {/* Visualize Button (Only if Object Selected) */}
+           {selectedObject && onVisualize && (
+              <button 
+                onClick={() => onVisualize(selectedObject, userInput)}
+                disabled={isInteractionDisabled}
+                className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 text-white rounded-xl transition-all shadow-lg font-bold text-xs"
+                title="Generate 3D Render of this object/room"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Visualize Selection
+              </button>
+           )}
+
            <button 
              onClick={onSend}
              disabled={!userInput.trim() || isInteractionDisabled}

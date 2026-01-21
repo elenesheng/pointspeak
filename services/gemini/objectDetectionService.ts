@@ -15,26 +15,31 @@ const cleanJson = (text: string): string => {
  * Used for client-side hit testing to avoid API calls on every click.
  */
 export const scanImageForObjects = async (base64Image: string): Promise<IdentifiedObject[]> => {
-  const cacheKey = generateCacheKey('fullScan_v4_surfaces', base64Image.substring(0, 50));
+  const cacheKey = generateCacheKey('fullScan_v5_rooms_objects', base64Image.substring(0, 50));
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
     const model = "gemini-2.5-flash"; 
 
     const prompt = `
-    Analyze this image and detect ALL distinct objects and surfaces.
+    Analyze this image and detect ALL distinct objects, surfaces, AND ROOMS.
     
     CRITICAL INSTRUCTIONS:
-    1. GRANULAR OBJECTS: Identify discrete items (e.g. "Lamp", "Vase", "Chair", "Faucet") with tight bounding boxes.
+    1. IF FLOOR PLAN DETECTED:
+       - You MUST identify each specific ROOM as a distinct object (e.g., "Master Bedroom", "Living Area", "Kitchen", "Bathroom").
+       - Draw the bounding box around the ENTIRE room area (walls to walls).
+       - Category for rooms should be "Structure".
+
+    2. GRANULAR OBJECTS: Identify discrete items (e.g. "Lamp", "Vase", "Chair", "Faucet") with tight bounding boxes.
     
-    2. SURFACES & BACKGROUNDS (PRIORITY): 
+    3. SURFACES & BACKGROUNDS (PRIORITY): 
        - You MUST detect "Kitchen Backsplash", "Floor" (Tile/Wood), "Countertop", "Cabinetry", and "Walls".
        - For these surfaces, draw the bounding box to cover the ENTIRE VISIBLE EXTENT of that surface, even if parts are blocked by furniture.
        - DO NOT ignore corners or edges of floors/walls.
     
     Return a JSON list. 
     For each object, provide:
-    1. "name": specific label (e.g. "Subway Tile Backsplash", "Oak Floor", "Marble Countertop").
+    1. "name": specific label (e.g. "Living Room", "Subway Tile Backsplash", "Oak Floor").
     2. "box_2d": [ymin, xmin, ymax, xmax] (normalized 0-1000 coordinates).
     3. "category": One of ["Furniture", "Appliance", "Structure", "Decor", "Surface"].
     `;

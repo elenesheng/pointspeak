@@ -132,13 +132,10 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     setScannedObjects([]);
 
     try {
-      const timeoutPromise = new Promise<DetailedRoomAnalysis>((_, reject) => 
-        setTimeout(() => reject(new Error("Analysis timed out")), 60000)
-      );
-
+      // Removed generic timeout, allowing scan to take as long as needed for accuracy
       // Run Analysis and Object Scan in parallel
       const [analysis, objects] = await Promise.all([
-        Promise.race([analyzeRoomSpace(base64), timeoutPromise]),
+        analyzeRoomSpace(base64),
         scanImageForObjects(base64)
       ]);
 
@@ -158,7 +155,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       if (currentOpId !== operationIdRef.current) return;
       
       const appErr = mapApiError(err);
-      console.warn("Room scan failed or timed out:", appErr);
+      console.warn("Room scan failed:", appErr);
       
       setRoomAnalysis({ 
         room_type: "Detected Room", 
@@ -168,7 +165,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
            { category: 'Critique', title: 'Analysis Pending', description: 'Could not complete deep scan. You can still edit the image.', suggestions: [] }
         ] 
       });
-      addLog('Room analysis skipped (timeout/error), but ready for commands.', 'error');
+      addLog('Room analysis failed, but ready for commands.', 'error');
     } finally {
       if (currentOpId === operationIdRef.current) {
         setStatus('Ready');
@@ -458,21 +455,28 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         // 1. Calculate Dirty Region
         const dirtyRegion = calculateDirtyRegion(targetObject || effectiveSelectedObject, pins);
         
-        // 2. Parallel: Update Insights + Scan New Image
+        // 2. Parallel: Update Insights + Scan New Image (NO TIMEOUT)
+        // We do NOT use Promise.race here anymore. We wait for the scan to finish.
         const [newInsights, newObjectsFull] = await Promise.all([
-          updateInsightsAfterEdit(pureBase64, roomAnalysis, translation.interpreted_intent),
-          scanImageForObjects(pureBase64)
+            updateInsightsAfterEdit(pureBase64, roomAnalysis, translation.interpreted_intent),
+            scanImageForObjects(pureBase64)
         ]);
         
         if (currentOpId !== operationIdRef.current) return;
         
-        setRoomAnalysis(prev => prev ? { ...prev, insights: newInsights } : null);
-        addLog('💡 Insights updated', 'thought');
+        if (newInsights) {
+             setRoomAnalysis(prev => prev ? { ...prev, insights: newInsights } : null);
+             addLog('💡 Insights updated', 'thought');
+        }
         
-        // 3. Smart Merge
-        const mergedObjects = smartMergeObjects(scannedObjects, newObjectsFull, dirtyRegion);
-        setScannedObjects(mergedObjects);
-        addLog(`✓ Smart Scan: Updated objects in edited region, preserved others.`, 'thought');
+        if (newObjectsFull) {
+            // 3. Smart Merge
+            const mergedObjects = smartMergeObjects(scannedObjects, newObjectsFull, dirtyRegion);
+            setScannedObjects(mergedObjects);
+            addLog(`✓ Smart Scan: Updated objects in edited region.`, 'thought');
+        } else {
+            addLog('Refinement failed. Object hitboxes may be approximate.', 'error');
+        }
       }
 
       return pureBase64; // Return for Autonomous Agent chaining

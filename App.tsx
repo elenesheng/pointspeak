@@ -12,6 +12,9 @@ import { useAutonomousAgent } from './hooks/useAutonomousAgent';
 // Services
 import { generateMultiAngleRender } from './services/gemini/renderingService';
 
+// Utils
+import { cropBase64Image, generateBinaryMask } from './utils/imageProcessing';
+
 // Components
 import { Canvas } from './components/canvas/Canvas';
 import { ReasoningPanel } from './components/reasoning/ReasoningPanel';
@@ -20,6 +23,7 @@ import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
 import { AutonomousAgentModal } from './components/autonomous/AutonomousAgentModal';
 import { AutonomousProvider } from './contexts/AutonomousContext';
 import { AutonomousConfig } from './services/gemini/autonomousAgentService';
+import { IdentifiedObject } from './types/spatial.types';
 
 const App: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
@@ -164,6 +168,19 @@ const App: React.FC = () => {
     }
   };
 
+  const handleObjectSelect = (obj: IdentifiedObject) => {
+    setSelectedObject(obj);
+    
+    // Minimal fix: Auto-place pins to room center
+    if (obj.category === 'Structure' && obj.box_2d) {
+        const cx = (obj.box_2d[1] + obj.box_2d[3]) / 2;
+        const cy = (obj.box_2d[0] + obj.box_2d[2]) / 2;
+        resetPins();
+        addPin({ x: cx, y: cy });
+        addLog(`Room active: ${obj.name}`, 'action');
+    }
+  };
+
   const handleSend = async (overrideData?: any) => {
     if (isAutonomousMode) return;
     
@@ -214,14 +231,23 @@ const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleGenerateFromPlan = async (planBase64: string, maskBase64: string, refBase64: string | null, stylePrompt: string) => {
+  const handleGenerateFromPlan = async (
+      planBase64: string, 
+      maskBase64: string, 
+      refBase64: string | null, 
+      stylePrompt: string,
+      existingObjects?: IdentifiedObject[]
+  ) => {
     setIsGeneratingRender(true);
     addLog('📐 Initiating Visualization Pipeline...', 'thought');
-    // EXPLICIT LOG MESSAGE
-    addLog('Generating single, immersive wide-angle perspective...', 'analysis');
+    addLog('Generating photorealistic projection...', 'analysis');
+
+    if (existingObjects && existingObjects.length > 0) {
+        addLog(`Using ${existingObjects.length} ground-truth objects.`, 'thought');
+    }
 
     try {
-      const resultImages = await generateMultiAngleRender(planBase64, maskBase64, refBase64, stylePrompt);
+      const resultImages = await generateMultiAngleRender(planBase64, maskBase64, refBase64, stylePrompt, existingObjects);
       
       addLog(`✓ Visualization complete.`, 'success');
       
@@ -241,6 +267,48 @@ const App: React.FC = () => {
     } finally {
       setIsGeneratingRender(false);
     }
+  };
+
+  const handleVisualizeObject = async (targetObject: IdentifiedObject, prompt: string) => {
+      const activeBase64 = getActiveBase64();
+      if (!activeBase64 || !targetObject.box_2d) {
+         addLog("Could not visualize: Missing image or selection bounds.", 'error');
+         return;
+      }
+
+      setIsGeneratingRender(true);
+      addLog(`🔍 Isolating "${targetObject.name}" for 3D visualization...`, 'thought');
+
+      try {
+         // 1. Calculate Padded Crop Box
+         const pad = 50; // Padding to include walls/context
+         const [ymin, xmin, ymax, xmax] = targetObject.box_2d;
+         const paddedBox: [number, number, number, number] = [
+            Math.max(0, ymin - pad),
+            Math.max(0, xmin - pad),
+            Math.min(1000, ymax + pad),
+            Math.min(1000, xmax + pad)
+         ];
+
+         // 2. Crop Image
+         const croppedBase64 = await cropBase64Image(activeBase64, paddedBox);
+         const croppedDataUrl = `data:image/jpeg;base64,${croppedBase64}`;
+         
+         // 3. Generate Mask for Crop
+         const maskDataUrl = await generateBinaryMask(croppedDataUrl);
+         const maskBase64 = maskDataUrl.split(',')[1];
+         
+         // 4. Render
+         const refBase64 = referenceImage ? referenceImage.split(',')[1] : null;
+         
+         addLog(`Rendering detailed view...`, 'action');
+         // We pass the single target object as "existingObjects" to enforce its presence
+         await handleGenerateFromPlan(croppedBase64, maskBase64, refBase64, prompt || `Visualize ${targetObject.name} in realistic style`, [targetObject]);
+
+      } catch (e: any) {
+         addLog(`Visualization failed: ${e.message}`, 'error');
+         setIsGeneratingRender(false);
+      }
   };
 
   const handleSwitchView = (index: number) => {
@@ -353,11 +421,15 @@ const App: React.FC = () => {
               onClearReference={() => { setReferenceImage(null); setReferenceDesc(null); }}
               // Pass hierarchy handlers
               selectedObject={selectedObject}
-              onObjectUpdate={setSelectedObject}
+              onObjectUpdate={handleObjectSelect}
               onClearSelection={() => {
                 setSelectedObject(null);
                 resetPins();
               }}
+              // New Visualization Handler
+              onVisualize={handleVisualizeObject}
+              // Pass detected objects for Room Selection
+              detectedObjects={scannedObjects}
             />
         </div>
 
