@@ -5,6 +5,7 @@ import { DetailedRoomAnalysis, IdentifiedObject, Coordinate } from '../types/spa
 import { IntentTranslation } from '../types/ai.types';
 import { mapApiError } from '../utils/errorHandler';
 import { GEMINI_CONFIG } from '../config/gemini.config';
+import { useSpatialStore } from '../store/spatialStore';
 
 // Services
 import { analyzeRoomSpace, updateInsightsAfterEdit } from '../services/gemini/roomAnalysisService';
@@ -23,9 +24,8 @@ const calculateDirtyRegion = (
   targetObject?: IdentifiedObject, 
   pins?: Coordinate[]
 ): [number, number, number, number] | null => {
-  // If we have a specific target object (e.g. from a Move or Edit on an object)
   if (targetObject?.box_2d) {
-    const pad = 50; // Padding to catch bleed/shadows
+    const pad = 50; 
     return [
       Math.max(0, targetObject.box_2d[0] - pad),
       Math.max(0, targetObject.box_2d[1] - pad),
@@ -34,11 +34,10 @@ const calculateDirtyRegion = (
     ];
   }
   
-  // If we used pins (e.g. Move Source -> Target)
   if (pins && pins.length > 0) {
      const xs = pins.map(p => p.x);
      const ys = pins.map(p => p.y);
-     const pad = 100; // Larger padding for point-based edits
+     const pad = 100;
      return [
        Math.max(0, Math.min(...ys) - pad),
        Math.max(0, Math.min(...xs) - pad),
@@ -47,7 +46,6 @@ const calculateDirtyRegion = (
      ];
   }
   
-  // If global edit (no target, no pins), return null to signify full rescan
   return null; 
 };
 
@@ -57,20 +55,17 @@ const smartMergeObjects = (
   newObjects: IdentifiedObject[], 
   dirtyRegion: [number, number, number, number] | null
 ) => {
-  if (!dirtyRegion) return newObjects; // Global edit, replace all
+  if (!dirtyRegion) return newObjects;
 
-  // [ymin, xmin, ymax, xmax]
   const intersects = (box: [number, number, number, number], region: [number, number, number, number]) => {
      return !(box[3] < region[1] || box[1] > region[3] || box[2] < region[0] || box[0] > region[2]);
   };
 
-  // 1. Keep OLD objects strictly OUTSIDE dirty region (Preserve Accuracy)
   const survivors = oldObjects.filter(obj => {
      if (!obj.box_2d) return false; 
      return !intersects(obj.box_2d, dirtyRegion);
   });
 
-  // 2. Keep NEW objects strictly INSIDE/INTERSECTING dirty region (Capture Changes)
   const additions = newObjects.filter(obj => {
      if (!obj.box_2d) return false;
      return intersects(obj.box_2d, dirtyRegion);
@@ -80,15 +75,12 @@ const smartMergeObjects = (
 };
 
 export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
+  const store = useSpatialStore();
+  const { currentVersionId, versions, versionOrder } = store;
+  
   const [status, setStatus] = useState<AppStatus>('Idle');
-  const [roomAnalysis, setRoomAnalysis] = useState<DetailedRoomAnalysis | null>(null);
-  const [selectedObject, setSelectedObject] = useState<IdentifiedObject | null>(null);
-  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [activeModel, setActiveModel] = useState<string>(GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO);
-  
-  // Scanned Objects State
-  const [scannedObjects, setScannedObjects] = useState<IdentifiedObject[]>([]);
   
   // Feedback UI
   const [estimatedTime, setEstimatedTime] = useState<number>(0);
@@ -97,56 +89,61 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const [activeRefImage, setActiveRefImage] = useState<string | null>(null);
   const [activeRefDesc, setActiveRefDesc] = useState<string | null>(null);
 
-  // History
-  const [editHistory, setEditHistory] = useState<EditHistoryEntry[]>([]);
-  const [currentEditIndex, setCurrentEditIndex] = useState<number>(-1);
-  const [currentWorkingImage, setCurrentWorkingImage] = useState<string | null>(null);
-
   const timerRef = useRef<number | null>(null);
-  
-  // OPERATION ID REF - Critical for invalidation
   const operationIdRef = useRef<number>(0);
 
+  // Derived State from Store
+  const currentSnapshot = store.getCurrentSnapshot();
+  const scannedObjects = store.getCurrentObjects();
+  const selectedObject = store.getSelectedObject();
+  const roomAnalysis = currentSnapshot?.roomAnalysis || null;
+  const generatedImage = (versionOrder.length > 1 && currentSnapshot) ? `data:image/jpeg;base64,${currentSnapshot.base64}` : null;
+  const currentWorkingImage = currentSnapshot?.base64 || null;
+  const currentEditIndex = currentVersionId ? versionOrder.indexOf(currentVersionId) : -1;
+
+  // Map store versions to UI history format
+  const editHistory: EditHistoryEntry[] = versionOrder.map(id => {
+    const v = versions[id];
+    return {
+      base64: v.base64,
+      timestamp: v.timestamp,
+      operation: v.operation,
+      description: v.description,
+      scannedObjects: v.objects,
+      roomAnalysis: v.roomAnalysis,
+      selectedObject: v.selectedObjectId ? v.objects.find(o => o.id === v.selectedObjectId) : null
+    };
+  });
+
   // 1. Initial Room Scan + Object Detection
-  const performInitialScan = async (base64: string) => {
-    // Increment Op ID to invalidate previous runs
+  const performInitialScan = async (base64: string, addToHistory: boolean = false) => {
     operationIdRef.current += 1;
     const currentOpId = operationIdRef.current;
 
     setStatus('Scanning Room...');
     addLog('Initiating architectural deep scan & object detection...', 'thought');
     setIsProcessing(true);
-    
-    const initialEntry: EditHistoryEntry = {
-      base64: base64,
-      timestamp: new Date(),
-      operation: 'Original',
-      description: 'Original Upload'
-    };
-    
-    // Set immediate UI state
-    setEditHistory([initialEntry]);
-    setCurrentEditIndex(0);
-    setCurrentWorkingImage(base64);
-    setGeneratedImage(null);
-    setScannedObjects([]);
 
     try {
-      // Removed generic timeout, allowing scan to take as long as needed for accuracy
-      // Run Analysis and Object Scan in parallel
       const [analysis, objects] = await Promise.all([
         analyzeRoomSpace(base64),
         scanImageForObjects(base64)
       ]);
 
-      // STALE CHECK
-      if (currentOpId !== operationIdRef.current) {
-        console.log(`[Abort] Scan operation ${currentOpId} aborted.`);
-        return; 
-      }
+      if (currentOpId !== operationIdRef.current) return;
 
-      setRoomAnalysis(analysis);
-      setScannedObjects(objects);
+      if (addToHistory) {
+         store.addVersion({
+            base64,
+            operation: 'Visualization',
+            description: 'Generated View',
+            objects,
+            roomAnalysis: analysis,
+            selectedObjectId: null
+         });
+      } else {
+         store.initialize(base64, objects, analysis);
+      }
       
       addLog('✓ Room Analysis & Object Scan Complete', 'analysis', analysis);
       addLog(`✓ Detected ${objects.length} interactable objects`, 'success');
@@ -157,14 +154,18 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       const appErr = mapApiError(err);
       console.warn("Room scan failed:", appErr);
       
-      setRoomAnalysis({ 
+      // Still initialize store even on partial failure to allow editing
+      const fallbackAnalysis = { 
         room_type: "Detected Room", 
         constraints: [], 
         traffic_flow: "Standard Layout", 
-        insights: [
-           { category: 'Critique', title: 'Analysis Pending', description: 'Could not complete deep scan. You can still edit the image.', suggestions: [] }
-        ] 
-      });
+        insights: [] 
+      };
+
+      if (!addToHistory) {
+        store.initialize(base64, [], fallbackAnalysis);
+      }
+      
       addLog('Room analysis failed, but ready for commands.', 'error');
     } finally {
       if (currentOpId === operationIdRef.current) {
@@ -174,87 +175,55 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     }
   };
 
-  // 2. Identify Object (Hit Test with Fuzzy Fallback)
+  // 2. Identify Object
   const identifyObjectAtLocation = async (base64: string, x: number, y: number) => {
     operationIdRef.current += 1;
     const currentOpId = operationIdRef.current;
-
+    
+    // Just simulated delay for UI feel, no actual async needed for hit testing existing objects
     setStatus('Analyzing Source...');
     setIsProcessing(true);
-    
-    // Simulate short processing time for UI feedback
     await new Promise(r => setTimeout(r, 50));
-
-    // Stale Check
     if (currentOpId !== operationIdRef.current) return;
 
-    // --- PHASE 1: PRECISE HIT TEST ---
-    let candidates = scannedObjects.filter(obj => {
+    // Use current objects from store
+    const objects = store.getCurrentObjects();
+    
+    let candidates = objects.filter(obj => {
        if (!obj.box_2d) return false;
        const [ymin, xmin, ymax, xmax] = obj.box_2d;
        return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
     });
-
-    // Sort by area (Smallest -> Largest)
+    
     candidates.sort((a, b) => {
         if (!a.box_2d || !b.box_2d) return 0;
         const areaA = (a.box_2d[2] - a.box_2d[0]) * (a.box_2d[3] - a.box_2d[1]);
         const areaB = (b.box_2d![2] - b.box_2d![0]) * (b.box_2d![3] - b.box_2d![1]);
         return areaA - areaB;
     });
-
+    
     let foundObject = candidates.length > 0 ? candidates[0] : null;
 
-    // --- PHASE 2: FUZZY HIT TEST (If Precise Misses) ---
     if (!foundObject) {
-       const FUZZY_RADIUS = 30; // +/- 30 units (3% of image)
-       
-       const nearbySurfaces = scannedObjects.filter(obj => {
+       // Fuzzy search surfaces
+       const FUZZY_RADIUS = 30;
+       const nearbySurfaces = objects.filter(obj => {
           if (!obj.box_2d) return false;
-          // Only check large items
           if (obj.category !== 'Surface' && obj.category !== 'Structure') return false;
-
           const [ymin, xmin, ymax, xmax] = obj.box_2d;
-          // Check if click is within expanded box
           return x >= (xmin - FUZZY_RADIUS) && x <= (xmax + FUZZY_RADIUS) && 
                  y >= (ymin - FUZZY_RADIUS) && y <= (ymax + FUZZY_RADIUS);
        });
-       
-       // Sort by distance to center of object (Prioritize closer objects)
-       nearbySurfaces.sort((a, b) => {
-          if (!a.box_2d || !b.box_2d) return 0;
-          const centerA_x = (a.box_2d[1] + a.box_2d[3]) / 2;
-          const centerA_y = (a.box_2d[0] + a.box_2d[2]) / 2;
-          const distA = Math.sqrt(Math.pow(x - centerA_x, 2) + Math.pow(y - centerA_y, 2));
-
-          const centerB_x = (b.box_2d![1] + b.box_2d![3]) / 2;
-          const centerB_y = (b.box_2d![0] + b.box_2d![2]) / 2;
-          const distB = Math.sqrt(Math.pow(x - centerB_x, 2) + Math.pow(y - centerB_y, 2));
-          
-          return distA - distB;
-       });
-
-       if (nearbySurfaces.length > 0) {
-          foundObject = nearbySurfaces[0];
-          addLog(`(Fuzzy Match) Snapped to nearby ${foundObject.name}`, 'thought');
-       }
+       if (nearbySurfaces.length > 0) foundObject = nearbySurfaces[0];
     }
 
     if (foundObject) {
-       setSelectedObject(foundObject);
+       store.setSelectedObject(foundObject.id);
        addLog(`Selected: ${foundObject.name} (${foundObject.category})`, 'success', foundObject);
     } else {
-       // Manual Fallback
-       const manualObj: IdentifiedObject = {
-         id: 'manual_selection',
-         name: 'Selected Area',
-         position: `[${x.toFixed(0)},${y.toFixed(0)}]`,
-         parent_structure: 'Object',
-         visual_details: 'User selected area',
-         category: 'Furniture'
-       };
-       setSelectedObject(manualObj);
-       addLog('No specific object detected at click. Using generic selection.', 'thought');
+       // Manual selection not persistent in store logic for simplicty, just log
+       store.setSelectedObject(null);
+       addLog('No specific object detected at click.', 'thought');
     }
     
     if (currentOpId === operationIdRef.current) {
@@ -265,19 +234,17 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
 
   // 3. Analyze Reference
   const analyzeReference = async (referenceBase64: string): Promise<string | null> => {
-    operationIdRef.current += 1;
+     operationIdRef.current += 1;
     const currentOpId = operationIdRef.current;
     
-    setIsProcessing(true); // Lock UI
+    setIsProcessing(true);
     setStatus('Analyzing Reference...');
     addLog('Analyzing reference material...', 'thought');
     setActiveRefImage(referenceBase64);
 
     try {
       const desc = await analyzeReferenceImage(referenceBase64);
-      
       if (currentOpId !== operationIdRef.current) return null;
-      
       setActiveRefDesc(desc);
       addLog(`✓ Reference analyzed: ${desc}`, 'success');
       return desc;
@@ -288,7 +255,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     } finally {
       if (currentOpId === operationIdRef.current) {
         setStatus('Ready');
-        setIsProcessing(false); // Unlock UI
+        setIsProcessing(false);
       }
     }
   };
@@ -347,22 +314,13 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         const targetX = pins[1].x;
         const targetY = pins[1].y;
         
-        let targetCandidates = scannedObjects.filter(obj => {
+        // Hit test against current objects
+        const objects = store.getCurrentObjects();
+        let targetCandidates = objects.filter(obj => {
            if (!obj.box_2d) return false;
            const [ymin, xmin, ymax, xmax] = obj.box_2d;
            return targetX >= xmin && targetX <= xmax && targetY >= ymin && targetY <= ymax;
         });
-        
-        if (targetCandidates.length === 0) {
-            const FUZZY_RADIUS = 30;
-            targetCandidates = scannedObjects.filter(obj => {
-                if (!obj.box_2d) return false;
-                if (obj.category !== 'Surface' && obj.category !== 'Structure') return false;
-                const [ymin, xmin, ymax, xmax] = obj.box_2d;
-                return targetX >= (xmin - FUZZY_RADIUS) && targetX <= (xmax + FUZZY_RADIUS) && 
-                       targetY >= (ymin - FUZZY_RADIUS) && targetY <= (ymax + FUZZY_RADIUS);
-            });
-        }
         
         targetCandidates.sort((a, b) => {
            if (!a.box_2d || !b.box_2d) return 0;
@@ -376,9 +334,6 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
              targetObject = { id: 'target', name: 'Target Spot', position: `[${targetX.toFixed(0)},${targetY.toFixed(0)}]` };
         }
       }
-
-      // Stale check
-      if (currentOpId !== operationIdRef.current) return;
 
       // Reasoning
       if (forceOverride && overrideData) {
@@ -431,32 +386,16 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       if (currentOpId !== operationIdRef.current) return;
 
       const pureBase64 = editedImageBase64.startsWith('data:') ? editedImageBase64.split(',')[1] : editedImageBase64;
-      const displayImage = editedImageBase64.startsWith('data:') ? editedImageBase64 : `data:image/jpeg;base64,${editedImageBase64}`;
-
-      const newEntry: EditHistoryEntry = {
-        base64: pureBase64,
-        timestamp: new Date(),
-        operation: translation.operation_type,
-        description: translation.interpreted_intent
-      };
-      const newHistory = [...editHistory.slice(0, currentEditIndex + 1), newEntry];
-      setEditHistory(newHistory);
-      setCurrentEditIndex(newHistory.length - 1);
-      setCurrentWorkingImage(pureBase64);
-      setGeneratedImage(displayImage);
-
-      addLog('✓ Image successfully edited', 'success');
-
-      // --- CRITICAL: POST-EDIT REFINEMENT (Partial Rescan) ---
+      
+      // --- POST-EDIT REFINEMENT ---
+      let updatedObjects = scannedObjects; // Start with current objects
+      let updatedInsights = roomAnalysis.insights;
+      
       if (roomAnalysis) {
-        // Change Status but KEEP isProcessing=true to block input
         setStatus('Refining object detection...');
-        
-        // 1. Calculate Dirty Region
         const dirtyRegion = calculateDirtyRegion(targetObject || effectiveSelectedObject, pins);
         
-        // 2. Parallel: Update Insights + Scan New Image (NO TIMEOUT)
-        // We do NOT use Promise.race here anymore. We wait for the scan to finish.
+        // Scan new image
         const [newInsights, newObjectsFull] = await Promise.all([
             updateInsightsAfterEdit(pureBase64, roomAnalysis, translation.interpreted_intent),
             scanImageForObjects(pureBase64)
@@ -464,22 +403,27 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         
         if (currentOpId !== operationIdRef.current) return;
         
-        if (newInsights) {
-             setRoomAnalysis(prev => prev ? { ...prev, insights: newInsights } : null);
-             addLog('💡 Insights updated', 'thought');
-        }
+        if (newInsights) updatedInsights = newInsights;
         
         if (newObjectsFull) {
-            // 3. Smart Merge
-            const mergedObjects = smartMergeObjects(scannedObjects, newObjectsFull, dirtyRegion);
-            setScannedObjects(mergedObjects);
+            // Merge logic preserves identity where possible
+            updatedObjects = smartMergeObjects(scannedObjects, newObjectsFull, dirtyRegion);
             addLog(`✓ Smart Scan: Updated objects in edited region.`, 'thought');
-        } else {
-            addLog('Refinement failed. Object hitboxes may be approximate.', 'error');
         }
       }
 
-      return pureBase64; // Return for Autonomous Agent chaining
+      // COMMIT TO STORE (Create New Version)
+      store.addVersion({
+        base64: pureBase64,
+        operation: translation.operation_type,
+        description: translation.interpreted_intent,
+        objects: updatedObjects,
+        roomAnalysis: { ...roomAnalysis, insights: updatedInsights },
+        selectedObjectId: effectiveSelectedObject?.id || null
+      });
+
+      addLog('✓ Image successfully edited', 'success');
+      return pureBase64;
 
     } catch (err) {
       if (currentOpId !== operationIdRef.current) return;
@@ -499,46 +443,45 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   };
 
   const jumpToEdit = useCallback((index: number) => {
-    if (index < 0 || index >= editHistory.length) return;
-    const entry = editHistory[index];
-    setCurrentEditIndex(index);
-    setCurrentWorkingImage(entry.base64);
-    setGeneratedImage(index === 0 ? null : `data:image/jpeg;base64,${entry.base64}`);
-    
-    // Scan newly jumped image
-    operationIdRef.current += 1;
-    const currentOpId = operationIdRef.current;
-    
-    scanImageForObjects(entry.base64).then(newObjects => {
-       if (currentOpId === operationIdRef.current) {
-          setScannedObjects(newObjects);
-       }
-    });
-
-    addLog(`↻ Jumped to state: ${entry.description}`, 'action');
-  }, [editHistory, addLog]);
+    store.jumpToVersion(index);
+    const snapshot = store.getCurrentSnapshot();
+    if(snapshot) {
+        addLog(`↻ Restored state: ${snapshot.description}`, 'action');
+    }
+  }, [store, addLog]);
 
   const undoEdit = useCallback(() => currentEditIndex > 0 && jumpToEdit(currentEditIndex - 1), [currentEditIndex, jumpToEdit]);
-  const redoEdit = useCallback(() => currentEditIndex < editHistory.length - 1 && jumpToEdit(currentEditIndex + 1), [currentEditIndex, editHistory.length, jumpToEdit]);
+  const redoEdit = useCallback(() => currentEditIndex < versionOrder.length - 1 && jumpToEdit(currentEditIndex + 1), [currentEditIndex, versionOrder.length, jumpToEdit]);
   const resetToOriginal = useCallback(() => jumpToEdit(0), [jumpToEdit]);
+  
+  const exportHistory = useCallback(() => {
+    if (versionOrder.length === 0) return;
+    addLog(`📥 Exporting ${versionOrder.length} versions...`, 'action');
+    
+    versionOrder.forEach((id, i) => {
+        const v = versions[id];
+        const link = document.createElement('a');
+        link.href = `data:image/jpeg;base64,${v.base64}`;
+        const num = (i + 1).toString().padStart(2, '0');
+        const safeDesc = (v.description || v.operation).replace(/[^a-z0-9]/gi, '_').substring(0, 20);
+        link.download = `${num}_${safeDesc}.jpg`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    });
+  }, [versionOrder, versions, addLog]);
 
   const resetAgent = () => {
-    // CRITICAL: Invalidate all running operations
     operationIdRef.current += 1;
-    
     setStatus('Idle');
-    setRoomAnalysis(null);
-    setSelectedObject(null);
-    setGeneratedImage(null);
-    setEditHistory([]);
-    setCurrentEditIndex(-1);
-    setCurrentWorkingImage(null);
-    setActiveRefImage(null);
-    setActiveRefDesc(null);
-    setEstimatedTime(0);
-    setScannedObjects([]);
     setIsProcessing(false);
-    if (timerRef.current) clearInterval(timerRef.current);
+    // Note: We don't necessarily clear the store here if we want to keep history until explicit upload
+    // But UI reset usually implies clearing state
+    // For now, we rely on performInitialScan to reset the store when a new image is uploaded.
+  };
+
+  const setSelectedObjectWrapper = (obj: IdentifiedObject | null) => {
+      store.setSelectedObject(obj ? obj.id : null);
   };
 
   return {
@@ -554,7 +497,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     executeCommand,
     analyzeReference,
     resetAgent,
-    setSelectedObject,
+    setSelectedObject: setSelectedObjectWrapper,
     editHistory,
     currentEditIndex,
     undoEdit,
@@ -562,8 +505,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     resetToOriginal,
     jumpToEdit,
     canUndo: currentEditIndex > 0,
-    canRedo: currentEditIndex < editHistory.length - 1,
+    canRedo: currentEditIndex < versionOrder.length - 1,
     estimatedTime, 
-    scannedObjects, 
+    scannedObjects,
+    exportHistory 
   };
 };

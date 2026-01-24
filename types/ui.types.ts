@@ -16,6 +16,10 @@ export interface EditHistoryEntry {
   timestamp: Date;
   operation: string;
   description: string;
+  // Snapshot Data for Versioning
+  scannedObjects?: IdentifiedObject[];
+  roomAnalysis?: DetailedRoomAnalysis | null;
+  selectedObject?: IdentifiedObject | null;
 }
 
 export type AppStatus = 

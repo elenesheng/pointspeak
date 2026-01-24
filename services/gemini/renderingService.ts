@@ -80,12 +80,12 @@ ${objectListString}
 - Preserve relative placement
 - If space is tight, allow partial cropping instead of shrinking
 
-CAMERA:
-- Interior perspective
-- Eye-level (~1.6m)
-- Wide lens (18–24mm)
-- Camera must be INSIDE the selected room
-- Floor and ceiling must be visible
+CAMERA (CRITICAL):
+- **HUMAN EYE-LEVEL PERSPECTIVE ONLY** (Approx 1.6m height).
+- **FORBIDDEN:** Isometric, Orthographic, Top-Down, Cutaway, Dollhouse views.
+- Position the camera inside the room, near the entrance/doorway, looking inward.
+- Vertical lines must be straight (2-point perspective).
+- Floor and ceiling must be visible.
 
 STYLE:
 - Apply style as MATERIALS and LIGHTING only

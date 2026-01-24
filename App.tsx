@@ -35,7 +35,8 @@ const App: React.FC = () => {
   const { 
     status, roomAnalysis, selectedObject, generatedImage, isProcessing, activeModel, setActiveModel,
     performInitialScan, identifyObjectAtLocation, executeCommand, analyzeReference, resetAgent, setSelectedObject,
-    editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo, scannedObjects
+    editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo, scannedObjects,
+    exportHistory
   } = useGeminiAgent({ addLog, pins });
   
   const {
@@ -260,7 +261,8 @@ const App: React.FC = () => {
       
       // Perform initial scan on the first view
       const pureBase64 = firstImage.split(',')[1];
-      performInitialScan(pureBase64);
+      // IMPORTANT: Add to history instead of resetting, preserving Plan context
+      performInitialScan(pureBase64, true);
 
     } catch (e: any) {
       addLog(`Render failed: ${e.message}`, 'error');
@@ -408,6 +410,7 @@ const App: React.FC = () => {
               editHistory={editHistory}
               currentEditIndex={currentEditIndex}
               onJumpToHistory={jumpToEdit}
+              onExportHistory={exportHistory}
             />
             
             <InputArea 
