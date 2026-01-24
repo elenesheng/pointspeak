@@ -87,10 +87,15 @@ CAMERA (CRITICAL):
 - Vertical lines must be straight (2-point perspective).
 - Floor and ceiling must be visible.
 
-STYLE:
-- Apply style as MATERIALS and LIGHTING only
-- Style must NOT affect geometry
-- User Prompt: "${styleDescription}"
+STYLE & MATERIAL RULES (CRITICAL):
+- Apply style as MATERIALS and LIGHTING only.
+- Style must NOT affect geometry.
+- **WOOD:** Natural matte or satin finish. **DO NOT** use excessive noise or high-frequency grain. It must look like planed lumber or veneer, not raw noise.
+- **GLASS:** Transparent or Reflective. **NEVER** apply wood grain, noise, or opaque textures to glass surfaces (e.g., cabinet doors, windows, showers).
+- **METAL:** Smooth, metallic reflection. No grain.
+- **SEMANTICS:** Apply textures logically. Sinks are ceramic/metal, not wood. Windows are glass, not wood.
+
+User Prompt: "${styleDescription}"
 
 FAILURE MODE:
 If instructions conflict:

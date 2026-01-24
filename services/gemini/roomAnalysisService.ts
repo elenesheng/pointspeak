@@ -54,7 +54,9 @@ const insightsWrapperSchema: Schema = {
 };
 
 export const analyzeRoomSpace = async (base64Image: string): Promise<DetailedRoomAnalysis> => {
-  const cacheKey = generateCacheKey('roomAnalysis_v16_align_strict', base64Image.substring(0, 50));
+  // Fix: Use length and tail to ensure uniqueness.
+  const uniqueId = `${base64Image.length}_${base64Image.slice(-30)}`;
+  const cacheKey = generateCacheKey('roomAnalysis_v17_align_strict', uniqueId);
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });

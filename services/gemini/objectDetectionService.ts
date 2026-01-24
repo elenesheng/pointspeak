@@ -15,7 +15,9 @@ const cleanJson = (text: string): string => {
  * Used for client-side hit testing to avoid API calls on every click.
  */
 export const scanImageForObjects = async (base64Image: string): Promise<IdentifiedObject[]> => {
-  const cacheKey = generateCacheKey('fullScan_v5_rooms_objects', base64Image.substring(0, 50));
+  // Fix: Use length and tail to ensure uniqueness.
+  const uniqueId = `${base64Image.length}_${base64Image.slice(-30)}`;
+  const cacheKey = generateCacheKey('fullScan_v6_rooms_objects', uniqueId);
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });

@@ -8,7 +8,9 @@ import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "..
  * Uses the Material & Texture Analyst persona.
  */
 export const analyzeReferenceImage = async (base64Image: string): Promise<string> => {
-  const cacheKey = generateCacheKey('refAnalysis_v41_object_id', base64Image.substring(0, 50));
+  // Fix: Use length and tail to ensure uniqueness. First 50 chars are often identical headers.
+  const uniqueId = `${base64Image.length}_${base64Image.slice(-30)}`;
+  const cacheKey = generateCacheKey('refAnalysis_v42_object_id', uniqueId);
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
