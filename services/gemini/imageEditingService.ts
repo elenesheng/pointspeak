@@ -22,38 +22,30 @@ export const performImageEdit = async (
 
   // 2. Prepare Context Variables
   const subjectName = identifiedObject.name;
-  const targetCoords = targetObject?.position || "the clicked location";
   const sourceCoords = identifiedObject.position;
   
-  // Detect if user wants to hang something on a wall (Mirror, Art, Clock)
-  const promptLower = (translation.proposed_action + " " + subjectName).toLowerCase();
-  const isVerticalDecor = /art|painting|canvas|poster|mirror|sconce|clock/i.test(promptLower);
-
   // 3. Helper: Build Strict Prompt using User's Template
   const buildStrictPrompt = (additionalInstructions: string = "") => {
     return `Output must have the same width, height, and aspect ratio as Image 1. Do not resize or crop anything.
 
 INSTRUCTION:
-- Apply only this action to object.
+- Apply only this action to the target object.
 - Leave everything else unchanged.
 - Verify dimension integrity.
 
 STRICT SYSTEM RULES (HIGHEST PRIORITY):
-1. Output must match Image 1’s exact pixel width, height, and aspect ratio.
-2. No cropping, zooming, outpainting, or extending the frame.
-3. Do not alter any pixel outside the specified target boundary.
-4. Preserve lighting, perspective, and scene geometry of the original photo.
-
-TEXTURE CONTINUITY RULE:
-- Any newly generated pixel must match the grain, noise, and sharpness of adjacent original pixels.
-- Do NOT smooth, blur, or airbrush flat surfaces.
-- Preserve natural photographic noise.
+1. **RESOLUTION PRESERVATION:** The output must be indistinguishable from the original in unedited areas. Do NOT downscale, blur, or denoise background objects.
+2. **TEXTURE FIDELITY:** Preserve the "Sensor Noise" and "Film Grain" of the original photo. Do not smooth out stainless steel (ovens, fridges) or glass surfaces. They must look photographic, not like 3D plastic.
+3. **MATERIAL ISOLATION:** 
+   - If applying WOOD texture: Apply ONLY to Floor/Cabinets. NEVER apply wood grain to Glass, Ovens, Windows, or Sinks.
+   - If applying GLASS/METAL: Must be smooth, reflective, and grain-free.
 
 TASK:
 Modify only the object described below using the provided reference image if applicable.
 
 PRESERVE:
 - All scene elements outside the subject boundary exactly as in Image 1.
+- Specifically protect: Appliances (Ovens, Coffee Machines), Glass Windows, and Reflections.
 
 TARGET:
 Object: "${subjectName}"
@@ -69,7 +61,7 @@ Do not replace surrounding background.
 Only modify the target object inside its original mask.` : ''}
 
 OUTPUT REQUIREMENTS:
-- Same image metadata dimensions as input.
+- High Resolution (2K).
 - No hallucinated content beyond the object.
 
 END
@@ -133,12 +125,12 @@ Follow the original image content exactly. Where uncertain, preserve the origina
       model: preferredModelId,
       contents: { parts },
       config: { 
-        // CRITICAL: Lower temperature for Flash to stop hallucinations
-        temperature: isPro ? 0.4 : 0.15, 
-        topP: 0.9,
+        // CRITICAL: Maximized quality settings
+        temperature: isPro ? 0.3 : 0.15, 
+        topP: 0.95, // Increased from 0.9 to encourage richer detail
         topK: 40,
-        // Only Pro supports specific imageConfig in some versions
-        // imageConfig: isPro ? { imageSize: '2K' } : undefined 
+        // FORCE 2K RESOLUTION: Essential to prevent blur compounding
+        imageConfig: isPro ? { imageSize: '2K' } : undefined 
       } 
     });
 

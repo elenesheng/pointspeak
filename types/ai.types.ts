@@ -1,5 +1,5 @@
 
-export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT';
+export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT' | 'SWAP';
 
 export interface IntentTranslation {
   operation_type: OperationType;
@@ -31,4 +31,15 @@ export interface SpatialValidation {
   canForce?: boolean;
   forceAction?: IntentTranslation;
   forceObject?: any;
+}
+
+export interface DesignSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  action_type: OperationType;
+  target_object_name: string;
+  suggested_prompt: string;
+  icon_hint: 'color' | 'layout' | 'style' | 'remove';
+  confidence: number;
 }

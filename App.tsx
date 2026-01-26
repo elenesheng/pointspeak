@@ -7,7 +7,7 @@ import { useReasoningLogs } from './hooks/useReasoningLogs';
 import { usePinManagement } from './hooks/usePinManagement';
 import { useImageUpload } from './hooks/useImageUpload';
 import { useGeminiAgent } from './hooks/useGeminiAgent';
-import { useAutonomousAgent } from './hooks/useAutonomousAgent';
+import { useSuggestions } from './hooks/useSuggestions';
 
 // Services
 import { generateMultiAngleRender } from './services/gemini/renderingService';
@@ -20,10 +20,9 @@ import { Canvas } from './components/canvas/Canvas';
 import { ReasoningPanel } from './components/reasoning/ReasoningPanel';
 import { InputArea } from './components/input/InputArea';
 import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
-import { AutonomousAgentModal } from './components/autonomous/AutonomousAgentModal';
-import { AutonomousProvider } from './contexts/AutonomousContext';
-import { AutonomousConfig } from './services/gemini/autonomousAgentService';
+import { DesignAssistant } from './components/suggestions/DesignAssistant';
 import { IdentifiedObject } from './types/spatial.types';
+import { IntentTranslation } from './types/ai.types';
 
 const App: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
@@ -36,23 +35,20 @@ const App: React.FC = () => {
     status, roomAnalysis, selectedObject, generatedImage, isProcessing, activeModel, setActiveModel,
     performInitialScan, identifyObjectAtLocation, executeCommand, analyzeReference, resetAgent, setSelectedObject,
     editHistory, currentEditIndex, undoEdit, redoEdit, resetToOriginal, jumpToEdit, canUndo, canRedo, scannedObjects,
-    exportHistory
+    exportHistory, cancelOperation
   } = useGeminiAgent({ addLog, pins });
   
-  const {
-    isAutonomousMode,
-    agentState,
-    analyses,
-    isModalOpen,
-    openModal,
-    closeModal,
-    startAutonomousMode,
-    pauseAgent,
-    resumeAgent,
-    stopAgent,
-    exportAnalysisReport,
-    exportImages
-  } = useAutonomousAgent(addLog);
+  // Design Assistant Hook
+  const { 
+    suggestions, 
+    isGenerating: isGeneratingSuggestions, 
+    isOpen: isAssistantOpen, 
+    setIsOpen: setIsAssistantOpen, 
+    generateIdeas, 
+    dismissSuggestion,
+    removeSuggestion,
+    clearSuggestions 
+  } = useSuggestions(addLog);
 
   const { imageUrl, handleFileUpload, clearImage, setImageUrl } = useImageUpload(
     () => resetAll(),
@@ -89,23 +85,16 @@ const App: React.FC = () => {
     checkKey();
   }, []);
 
-  // Auto-show insights only for long-running processes (Initial Scan or Generation)
-  useEffect(() => {
-    if (isProcessing && status !== 'Analyzing Source...') {
-      setShowInsights(true);
-    }
-  }, [isProcessing, status]);
-
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && !isProcessing && !isAutonomousMode) {
+      if ((e.ctrlKey || e.metaKey) && !isProcessing) {
         if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); if (canUndo) undoEdit(); }
         if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); if (canRedo) redoEdit(); }
       }
     };
     window.addEventListener('keydown', handleKeyboard);
     return () => window.removeEventListener('keydown', handleKeyboard);
-  }, [canUndo, canRedo, undoEdit, redoEdit, isProcessing, isAutonomousMode]);
+  }, [canUndo, canRedo, undoEdit, redoEdit, isProcessing]);
 
   const handleConnectKey = async () => {
     if (window.aistudio) {
@@ -119,8 +108,7 @@ const App: React.FC = () => {
     clearLogs();
     clearImage();
     resetAgent();
-    // Ensure autonomous mode is stopped if active
-    if (isAutonomousMode) stopAgent();
+    clearSuggestions();
     setReferenceImage(null);
     setReferenceDesc(null);
     setUserInput('');
@@ -137,9 +125,6 @@ const App: React.FC = () => {
   };
 
   const handleImageClick = async (e: React.MouseEvent<HTMLDivElement>, rect: DOMRect) => {
-    // Block clicks during autonomous mode
-    if (isAutonomousMode) return;
-
     const activeBase64 = getActiveBase64();
     if (!activeBase64) return;
 
@@ -182,33 +167,73 @@ const App: React.FC = () => {
     }
   };
 
-  const handleSend = async (overrideData?: any) => {
-    if (isAutonomousMode) return;
-    
+  const handleSend = async (overrideData?: any, textOverride?: string) => {
     const activeBase64 = getActiveBase64();
-    if (!activeBase64 || (!userInput.trim() && !overrideData)) return;
+    const textToSend = textOverride || userInput;
     
+    if (!activeBase64 || (!textToSend.trim() && !overrideData)) return;
+    
+    // Capture reference before cleanup
     const refBase64 = referenceImage ? referenceImage.split(',')[1] : undefined;
-    await executeCommand(activeBase64, userInput, !!overrideData, overrideData, referenceDesc || undefined, refBase64);
     
-    if (!overrideData) setUserInput('');
+    // Clear input immediately 
+    setUserInput(''); 
+    
+    // Cleanup Reference UI immediately so next generation doesn't use it by mistake
     setReferenceImage(null);
     setReferenceDesc(null);
+    
+    await executeCommand(
+        activeBase64, 
+        textToSend, 
+        !!overrideData, 
+        overrideData, 
+        referenceDesc || undefined, 
+        refBase64
+    );
   };
-
-  const handleStartAutonomous = async (config: AutonomousConfig) => {
-    const workingImage = getActiveBase64();
-    if (!workingImage || !roomAnalysis) {
-      addLog("Cannot start autonomous mode: Missing image or analysis.", 'error');
-      return;
+  
+  const handleGetIdeas = async (goal: string) => {
+    const activeBase64 = getActiveBase64();
+    if (!activeBase64) return;
+    
+    await generateIdeas(activeBase64, roomAnalysis, scannedObjects, goal);
+  };
+  
+  const handleApplySuggestion = (suggestion: any) => {
+    const activeBase64 = getActiveBase64();
+    if (!activeBase64) return;
+    
+    // 1. Remove this specific suggestion from the list immediately (visual feedback)
+    removeSuggestion(suggestion.id);
+    
+    // 2. Close panel
+    setIsAssistantOpen(false);
+    
+    addLog(`✨ Applying idea: ${suggestion.title}`, 'action');
+    
+    // Auto-select target if possible
+    if (suggestion.target_object_name) {
+       const target = scannedObjects.find(o => o.name.toLowerCase() === suggestion.target_object_name.toLowerCase());
+       if (target) setSelectedObject(target);
     }
     
-    await startAutonomousMode(
-      config,
-      workingImage,
-      roomAnalysis,
-      (img, text, force, override) => executeCommand(img, text, force, override)
-    );
+    // Send immediately with explicit text override
+    setTimeout(() => {
+        handleSend(null, suggestion.suggested_prompt);
+    }, 100);
+  };
+  
+  const handleEditSuggestion = (suggestion: any) => {
+      // Just populate input and close panel
+      setUserInput(suggestion.suggested_prompt);
+      setIsAssistantOpen(false);
+      
+      // Auto-select target if possible
+      if (suggestion.target_object_name) {
+         const target = scannedObjects.find(o => o.name.toLowerCase() === suggestion.target_object_name.toLowerCase());
+         if (target) setSelectedObject(target);
+      }
   };
 
   const handleReferenceUpload = async (file: File) => {
@@ -222,14 +247,25 @@ const App: React.FC = () => {
       const desc = await analyzeReference(base64);
       setReferenceDesc(desc);
       
-      // Auto-populate prompt AFTER analysis is complete
-      if (selectedObject) {
-         setUserInput(`Change ${selectedObject.name} using this reference`);
-      } else {
-         setUserInput(`Apply this reference style to the room`);
+      // Auto-populate prompt AFTER analysis is complete (if not cancelled)
+      if (desc) {
+          if (selectedObject) {
+             setUserInput(`Change ${selectedObject.name} using this reference`);
+          } else {
+             setUserInput(`Apply this reference style to the room`);
+          }
       }
     };
     reader.readAsDataURL(file);
+  };
+  
+  const handleClearReference = () => {
+      // If we are currently analyzing, we must cancel the operation
+      if (status === 'Analyzing Reference...') {
+          cancelOperation();
+      }
+      setReferenceImage(null);
+      setReferenceDesc(null);
   };
 
   const handleGenerateFromPlan = async (
@@ -333,21 +369,23 @@ const App: React.FC = () => {
     performInitialScan(pureBase64);
   };
   
-  // Construct context value for Autonomous Agent
-  const autonomousContextValue = {
-    isAutonomousMode,
-    agentState,
-    analyses,
-    isModalOpen,
-    openModal,
-    closeModal,
-    startMarathon: handleStartAutonomous,
-    pauseAgent,
-    resumeAgent,
-    stopAgent,
-    exportAnalysisReport,
-    exportImages,
-    disabled: !imageUrl || (isProcessing && !isAutonomousMode)
+  const handleCanvasQuickAction = (action: 'remove' | 'style', object: IdentifiedObject) => {
+     handleObjectSelect(object);
+     
+     if (action === 'remove') {
+        addLog(`Quick Action: Removing ${object.name}...`, 'action');
+        const removeTranslation: IntentTranslation = {
+           operation_type: 'REMOVE',
+           interpreted_intent: `Quick Remove: ${object.name}`,
+           proposed_action: `Remove the ${object.name} completely. Inpaint the background to match surroundings.`,
+           spatial_check_required: false,
+           imagen_prompt: `Remove ${object.name}`,
+           active_subject_name: object.name
+        };
+        handleSend({ forceAction: removeTranslation, forceObject: object });
+     } else if (action === 'style') {
+        setUserInput(`Change material of ${object.name} to...`);
+     }
   };
 
   if (isKeyChecking) return <div className="h-screen w-screen bg-slate-950 flex items-center justify-center text-slate-500">Checking permissions...</div>;
@@ -358,7 +396,7 @@ const App: React.FC = () => {
         <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-2xl shadow-indigo-500/20">
           <Target className="w-10 h-10 text-white" />
         </div>
-        <h1 className="text-3xl font-bold text-slate-100 mb-2">PointSpeak Spatial Intelligence</h1>
+        <h1 className="text-3xl font-bold text-slate-100 mb-2">SpaceVision Spatial Intelligence</h1>
         <button onClick={handleConnectKey} className="flex items-center gap-3 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg">
           <Key className="w-5 h-5" /> Connect API Key
         </button>
@@ -367,88 +405,103 @@ const App: React.FC = () => {
   }
 
   return (
-    <AutonomousProvider value={autonomousContextValue}>
-      <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
-        <Canvas 
-          imageUrl={imageUrl}
-          generatedImage={generatedImage}
-          status={isGeneratingRender ? 'Generating Visualization...' : status}
-          pins={pins}
-          isProcessing={isProcessing || isGeneratingRender}
-          onImageClick={handleImageClick}
-          onFileUpload={handleFileUpload}
-          onReset={resetAll}
-          fileInputRef={fileInputRef}
-          canUndo={canUndo && !isAutonomousMode} 
-          canRedo={canRedo && !isAutonomousMode} 
-          currentEditIndex={currentEditIndex}
-          onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
-          // Insights
-          hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
-          onToggleInsights={() => setShowInsights(!showInsights)}
-          // Autonomous Trigger
-          onOpenAutonomous={openModal}
-          // Detected Objects for Visualization
-          detectedObjects={scannedObjects}
-          // New Render Prop
-          onGenerateFromPlan={handleGenerateFromPlan}
-          // Multi-View Props
-          visualizationViews={visualizationViews}
-          activeViewIndex={activeViewIndex}
-          onViewSwitch={handleSwitchView}
-        />
+    <div className="flex h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden">
+      <Canvas 
+        imageUrl={imageUrl}
+        generatedImage={generatedImage}
+        status={isGeneratingRender ? 'Generating Visualization...' : status}
+        pins={pins}
+        isProcessing={isProcessing || isGeneratingRender}
+        onImageClick={handleImageClick}
+        onFileUpload={handleFileUpload}
+        onReset={resetAll}
+        fileInputRef={fileInputRef}
+        canUndo={canUndo} 
+        canRedo={canRedo} 
+        currentEditIndex={currentEditIndex}
+        onUndo={undoEdit} onRedo={redoEdit} onResetToOriginal={resetToOriginal}
+        // Insights
+        hasInsights={!!roomAnalysis?.insights && roomAnalysis.insights.length > 0}
+        onToggleInsights={() => setShowInsights(!showInsights)}
+        // Design Assistant Trigger
+        onOpenAutonomous={() => setIsAssistantOpen(true)}
+        // Detected Objects for Visualization
+        detectedObjects={scannedObjects}
+        // New Render Prop
+        onGenerateFromPlan={handleGenerateFromPlan}
+        // Multi-View Props
+        visualizationViews={visualizationViews}
+        activeViewIndex={activeViewIndex}
+        onViewSwitch={handleSwitchView}
+        // Quick Actions
+        onQuickAction={handleCanvasQuickAction}
+      />
 
-        <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl">
-            <ReasoningPanel 
-              logs={logs}
-              status={isGeneratingRender ? 'Generating Visualization...' : status}
-              isProcessing={isProcessing || isGeneratingRender}
-              onForceExecute={(action, object) => handleSend({ forceAction: action, forceObject: object })}
-              onAlternativeClick={(suggestion) => setUserInput(suggestion)}
-              activeModel={activeModel}
-              onModelChange={setActiveModel}
-              editHistory={editHistory}
-              currentEditIndex={currentEditIndex}
-              onJumpToHistory={jumpToEdit}
-              onExportHistory={exportHistory}
-            />
-            
-            <InputArea 
-              userInput={userInput}
-              setUserInput={setUserInput}
-              onSend={() => handleSend()}
-              disabled={!imageUrl || isProcessing || isAutonomousMode || isGeneratingRender}
-              placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
-              onReferenceUpload={handleReferenceUpload}
-              referenceImagePreview={referenceImage}
-              onClearReference={() => { setReferenceImage(null); setReferenceDesc(null); }}
-              // Pass hierarchy handlers
-              selectedObject={selectedObject}
-              onObjectUpdate={handleObjectSelect}
-              onClearSelection={() => {
-                setSelectedObject(null);
-                resetPins();
-              }}
-              // New Visualization Handler
-              onVisualize={handleVisualizeObject}
-              // Pass detected objects for Room Selection
-              detectedObjects={scannedObjects}
-            />
-        </div>
+      <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl relative">
+          <ReasoningPanel 
+            logs={logs}
+            status={isGeneratingRender ? 'Generating Visualization...' : status}
+            isProcessing={isProcessing || isGeneratingRender}
+            onForceExecute={(action, object) => handleSend({ forceAction: action, forceObject: object })}
+            onAlternativeClick={(suggestion) => setUserInput(suggestion)}
+            activeModel={activeModel}
+            onModelChange={setActiveModel}
+            editHistory={editHistory}
+            currentEditIndex={currentEditIndex}
+            onJumpToHistory={jumpToEdit}
+            onExportHistory={exportHistory}
+            onCancel={cancelOperation}
+          />
+          
+          <InputArea 
+            userInput={userInput}
+            setUserInput={setUserInput}
+            onSend={() => handleSend()}
+            disabled={!imageUrl || isProcessing || isGeneratingRender}
+            placeholder={pins.length === 2 ? "Type 'Move'..." : selectedObject ? `Modify ${selectedObject.name}...` : "Type to edit entire room..."}
+            onReferenceUpload={handleReferenceUpload}
+            referenceImagePreview={referenceImage}
+            onClearReference={handleClearReference}
+            // Pass hierarchy handlers
+            selectedObject={selectedObject}
+            onObjectUpdate={handleObjectSelect}
+            onClearSelection={() => {
+              setSelectedObject(null);
+              resetPins();
+            }}
+            // New Visualization Handler
+            onVisualize={handleVisualizeObject}
+            // Pass detected objects for Room Selection
+            detectedObjects={scannedObjects}
+            // Trigger Assistant
+            onGetIdeas={handleGetIdeas}
+            // Is Rendered View Flag
+            isRenderedView={visualizationViews.length > 0}
+            // 2D Plan Flag
+            isPlan={roomAnalysis?.is_2d_plan || false}
+          />
 
-        {/* Insights Panel */}
-        <RoomInsightsPanel 
-          roomAnalysis={roomAnalysis}
-          isVisible={showInsights}
-          onClose={() => setShowInsights(false)}
-          status={status}
-          mode={(isProcessing || isGeneratingRender) ? 'waiting' : 'viewing'}
-        />
-
-        {/* Autonomous Modal */}
-        <AutonomousAgentModal />
+          {/* Design Assistant Panel */}
+          <DesignAssistant 
+            isOpen={isAssistantOpen}
+            onClose={() => setIsAssistantOpen(false)}
+            suggestions={suggestions}
+            isGenerating={isGeneratingSuggestions}
+            onApply={handleApplySuggestion}
+            onDismiss={dismissSuggestion}
+            onEditPreview={handleEditSuggestion}
+          />
       </div>
-    </AutonomousProvider>
+
+      {/* Insights Panel */}
+      <RoomInsightsPanel 
+        roomAnalysis={roomAnalysis}
+        isVisible={showInsights}
+        onClose={() => setShowInsights(false)}
+        status={status}
+        mode={(isProcessing || isGeneratingRender) ? 'waiting' : 'viewing'}
+      />
+    </div>
   );
 };
 

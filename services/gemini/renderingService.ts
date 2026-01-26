@@ -125,7 +125,9 @@ A photorealistic 3D interior image that is a faithful projection of the selected
         contents: { parts },
         config: { 
             systemInstruction: systemPrompt,
-            temperature: 0.2 // Low temperature for strict adherence
+            temperature: 0.2, // Low temperature for strict adherence
+            // Ensure initial render is also high quality
+            imageConfig: { imageSize: '2K' }
         }
       });
       

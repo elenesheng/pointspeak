@@ -115,6 +115,16 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     };
   });
 
+  const cancelOperation = useCallback(() => {
+    if (!isProcessing) return;
+    operationIdRef.current += 1; // Invalidate current op
+    setIsProcessing(false);
+    setStatus('Idle');
+    setEstimatedTime(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+    addLog('Operation cancelled by user.', 'action');
+  }, [isProcessing, addLog]);
+
   // 1. Initial Room Scan + Object Detection
   const performInitialScan = async (base64: string, addToHistory: boolean = false) => {
     operationIdRef.current += 1;
@@ -508,6 +518,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     canRedo: currentEditIndex < versionOrder.length - 1,
     estimatedTime, 
     scannedObjects,
-    exportHistory 
+    exportHistory,
+    cancelOperation
   };
 };

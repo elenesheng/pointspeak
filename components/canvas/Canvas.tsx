@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Upload, Trash2, ScanSearch, Trash, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Timer, Layers, Zap, Map as MapIcon, ArrowRight, LayoutTemplate, Camera, Info } from 'lucide-react';
+import { Upload, Trash2, ScanSearch, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Layers, Map as MapIcon, ArrowRight, LayoutTemplate, Camera, Palette, Eye } from 'lucide-react';
 import { Coordinate, IdentifiedObject } from '../../types/spatial.types';
 import { AppStatus } from '../../types/ui.types';
 import { generateBinaryMask } from '../../utils/imageProcessing';
@@ -31,6 +31,8 @@ interface CanvasProps {
   visualizationViews?: string[];
   activeViewIndex?: number;
   onViewSwitch?: (index: number) => void;
+  // New Quick Actions
+  onQuickAction?: (action: 'remove' | 'style', object: IdentifiedObject) => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ 
@@ -39,7 +41,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   canUndo, canRedo, currentEditIndex, onUndo, onRedo, onResetToOriginal,
   hasInsights, onToggleInsights, estimatedTime, onOpenAutonomous,
   detectedObjects = [], onGenerateFromPlan,
-  visualizationViews = [], activeViewIndex = 0, onViewSwitch
+  visualizationViews = [], activeViewIndex = 0, onViewSwitch,
+  onQuickAction
 }) => {
   const [imgError, setImgError] = useState(false);
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
@@ -89,6 +92,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!imageRef.current || !imageUrl || isProcessing) return;
     
+    // Calculate relative coordinates
     const rect = imageRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -109,7 +113,7 @@ export const Canvas: React.FC<CanvasProps> = ({
              normY >= obj.box_2d[0] && normY <= obj.box_2d[2]
           )
           .sort((a, b) => {
-             const areaA = (a.box_2d![2] - a.box_2d![0]) * (a.box_2d![3] - a.box_2d![1]);
+             const areaA = (a.box_2d![2] - a.box_2d![0]) * (a.box_2d![3] - a.box_2d[1]);
              const areaB = (b.box_2d![2] - b.box_2d![0]) * (b.box_2d![3] - b.box_2d![1]);
              return areaA - areaB;
           })[0];
@@ -131,6 +135,9 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!imageRef.current || !imageUrl || isProcessing) return;
     
+    // Prevent ripple if clicking a tooltip button
+    if ((e.target as HTMLElement).closest('button')) return;
+
     const rect = imageRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -191,7 +198,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const getStatusIcon = () => {
-    if (status === 'Removing Object...') return <Trash className="w-16 h-16 text-rose-400 animate-pulse" />;
+    if (status === 'Removing Object...') return <Trash2 className="w-16 h-16 text-rose-400 animate-pulse" />;
     if (status === 'Repositioning Object...') return <Move className="w-16 h-16 text-sky-400 animate-pulse" />;
     if (status === 'Transforming Object...') return <Sparkles className="w-16 h-16 text-purple-400 animate-pulse" />;
     if (status === 'Generating Visualization...') return <ImageIcon className="w-16 h-16 text-emerald-400 animate-pulse" />;
@@ -211,21 +218,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-auto bg-slate-900/50">
         
-        {/* Tab Switcher */}
+        {/* Hidden Tab Switcher Logic maintained for future use */}
+        {/* 
         <div className="flex p-1 bg-slate-800 rounded-xl mb-8 border border-slate-700">
-           <button 
-             onClick={() => handleModeSwitch('photo')}
-             className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${uploadMode === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
-           >
-             <ScanSearch className="w-4 h-4" /> Analyze Photo
-           </button>
-           <button 
-             onClick={() => handleModeSwitch('plan')}
-             className={`flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${uploadMode === 'plan' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}
-           >
-             <MapIcon className="w-4 h-4" /> Visualize Plan
-           </button>
-        </div>
+           <button onClick={() => handleModeSwitch('photo')}>Analyze Photo</button>
+           <button onClick={() => handleModeSwitch('plan')}>Visualize Plan</button>
+        </div> 
+        */}
 
         {uploadMode === 'photo' ? (
             /* Classic Upload */
@@ -237,12 +236,15 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <Upload className="w-10 h-10 text-slate-500 group-hover:text-indigo-400" />
               </div>
               <div className="text-center px-8">
-                <p className="text-xl font-bold text-slate-200">Point & Speak Analysis</p>
-                <p className="text-sm text-slate-500 mt-2">Upload an existing interior photo to edit, rearrange, or analyze using spatial reasoning.</p>
+                <p className="text-xl font-bold text-slate-200">SpaceVision</p>
+                <p className="text-sm text-slate-500 mt-2">
+                  Upload an existing interior photo to edit, rearrange, or analyze using spatial reasoning.
+                  <br/><span className="text-indigo-400/80 mt-1 block">Or upload a floor plan to visualize styles.</span>
+                </p>
               </div>
             </div>
         ) : (
-            /* Plan Visualization Mode */
+            /* Plan Visualization Mode - Hidden from initial view but preserved in logic */
             <div className="w-full max-w-4xl grid grid-cols-2 gap-8 animate-in zoom-in-95 duration-300">
                {/* Left: Inputs */}
                <div className="space-y-6">
@@ -324,42 +326,45 @@ export const Canvas: React.FC<CanvasProps> = ({
     );
   }
 
-  // Same return as before...
   return (
     <div className="flex-1 relative flex flex-col bg-slate-900 overflow-hidden">
-      {/* Top Bar (Unchanged) */}
+      {/* Top Bar */}
       <div className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900/50 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <span className="font-bold tracking-tight text-lg">PointSpeak</span>
+          <span className="font-bold tracking-tight text-lg text-white">SpaceVision</span>
           {!isProcessing && (
-            <span className="text-xs text-slate-400 bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
+            <span className="text-xs font-medium text-slate-400 bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
               {getInstructionText()}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
            {hasInsights && (
-             <button onClick={onToggleInsights} className="flex items-center gap-2 px-3 py-2 mr-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-lg text-xs font-medium transition-all">
-               <Sparkles className="w-3.5 h-3.5" /> Insights
+             <button 
+                onClick={onToggleInsights} 
+                className={`flex items-center gap-2 px-3 py-2 mr-2 rounded-lg text-xs font-medium transition-all ${
+                    isProcessing 
+                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/50 animate-pulse' 
+                        : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+             >
+               {isProcessing ? <Eye className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+               {isProcessing ? 'View Analysis' : 'View Analysis'}
              </button>
            )}
            <div className="flex items-center gap-1 mr-2 border-r border-slate-700 pr-3">
-             <button onClick={onUndo} disabled={!canUndo} className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-xs text-slate-300 transition-all"><Undo2 className="w-3.5 h-3.5" /></button>
-             <button onClick={onRedo} disabled={!canRedo} className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-xs text-slate-300 transition-all"><Redo2 className="w-3.5 h-3.5" /></button>
+             <button onClick={onUndo} disabled={!canUndo} className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-slate-300 transition-all"><Undo2 className="w-3.5 h-3.5" /></button>
+             <button onClick={onRedo} disabled={!canRedo} className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg text-slate-300 transition-all"><Redo2 className="w-3.5 h-3.5" /></button>
              {currentEditIndex > 0 && (
-               <button onClick={onResetToOriginal} className="flex items-center gap-1 px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-lg text-xs ml-1 transition-all"><RotateCcw className="w-3.5 h-3.5" /></button>
+               <button onClick={onResetToOriginal} className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 ml-1 transition-all"><RotateCcw className="w-3.5 h-3.5" /></button>
              )}
            </div>
-           {onOpenAutonomous && (
-              <button onClick={onOpenAutonomous} className="p-2 mr-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-all shadow-lg shadow-purple-900/20 group">
-                <Zap className="w-5 h-5 group-hover:animate-pulse" />
-              </button>
-           )}
-           <button onClick={handleFullReset} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"><Trash2 className="w-5 h-5" /></button>
+           
+           <button onClick={handleFullReset} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><Trash2 className="w-5 h-5" /></button>
         </div>
       </div>
 
-      {/* Image Area (Unchanged logic, just ensure imports match) */}
+      {/* Image Area */}
       <div className="flex-1 flex items-center justify-center p-8 overflow-auto relative">
         <div 
           className={`relative max-h-full max-w-full inline-block rounded-xl shadow-2xl overflow-hidden group ${isProcessing ? 'cursor-wait' : 'cursor-none'}`}
@@ -383,10 +388,14 @@ export const Canvas: React.FC<CanvasProps> = ({
             <div key={ripple.id} className="absolute w-20 h-20 border-2 border-indigo-400 rounded-full pointer-events-none z-25" style={{ left: `${ripple.x}px`, top: `${ripple.y}px`, transform: 'translate(-50%, -50%)', animation: 'ping 1s cubic-bezier(0, 0, 0.2, 1)' }} />
           ))}
 
+          {/* Enhanced Hover Object Box Only (No Toolbar) */}
           {hoveredObject && hoveredObject.box_2d && !isProcessing && (
-            <div className="absolute z-20 pointer-events-none animate-in fade-in duration-200" style={{ top: `${hoveredObject.box_2d[0] / 10}%`, left: `${hoveredObject.box_2d[1] / 10}%`, height: `${(hoveredObject.box_2d[2] - hoveredObject.box_2d[0]) / 10}%`, width: `${(hoveredObject.box_2d[3] - hoveredObject.box_2d[1]) / 10}%` }}>
-               <div className="w-full h-full border border-white/50 bg-white/5 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.2)]" />
-               <div className="absolute -top-6 left-0 bg-slate-900/90 text-white text-[10px] font-bold px-2 py-1 rounded shadow-lg border border-slate-700 whitespace-nowrap">{hoveredObject.name}</div>
+            <div className="absolute z-20 pointer-events-auto animate-in fade-in duration-200" style={{ top: `${hoveredObject.box_2d[0] / 10}%`, left: `${hoveredObject.box_2d[1] / 10}%`, height: `${(hoveredObject.box_2d[2] - hoveredObject.box_2d[0]) / 10}%`, width: `${(hoveredObject.box_2d[3] - hoveredObject.box_2d[1]) / 10}%` }}>
+               <div className="w-full h-full border border-white/60 bg-white/10 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.3)] backdrop-brightness-110 pointer-events-none" />
+               {/* Label Only */}
+               <div className="absolute -top-6 left-0 bg-black/70 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded font-bold">
+                  {hoveredObject.name}
+               </div>
             </div>
           )}
 
@@ -423,8 +432,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         
         {/* Multi-View Switcher UI */}
         {visualizationViews && visualizationViews.length > 1 && !isProcessing && (
-           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-2 rounded-2xl border border-slate-700 shadow-2xl z-40 animate-in slide-in-from-bottom-6">
-              <div className="text-[10px] font-bold text-slate-500 uppercase px-2 flex items-center gap-1.5">
+           <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-2 rounded-xl border border-slate-700 shadow-2xl z-40 animate-in slide-in-from-bottom-6">
+              <div className="text-xs font-bold text-slate-500 uppercase px-2 flex items-center gap-1.5">
                  <Camera className="w-3 h-3" /> Angles
               </div>
               <div className="w-px h-4 bg-slate-700" />
