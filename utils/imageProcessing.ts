@@ -98,7 +98,74 @@ export const generateBinaryMask = async (imageSrc: string): Promise<string> => {
   });
 };
 
-// Crop Image Utility
+// Quality Preservation Utilities
+// Store images as PNG (lossless) internally, convert to JPEG only for API
+
+/**
+ * Converts any image format to PNG (lossless) for internal storage
+ * This prevents quality degradation from repeated JPEG compression
+ */
+export const convertToPNG = async (base64: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context failed'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      // Extract base64 without data URL prefix
+      const pngDataUrl = canvas.toDataURL('image/png');
+      resolve(pngDataUrl.split(',')[1]);
+    };
+    img.onerror = reject;
+    // Handle both data URLs and raw base64
+    img.src = base64.startsWith('data:') ? base64 : `data:image/jpeg;base64,${base64}`;
+  });
+};
+
+/**
+ * Converts PNG to JPEG for API calls (if needed)
+ * Uses high quality (0.95) to minimize compression artifacts
+ */
+export const convertToJPEG = async (base64: string, quality: number = 0.95): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context failed'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      // Extract base64 without data URL prefix
+      const jpegDataUrl = canvas.toDataURL('image/jpeg', quality);
+      resolve(jpegDataUrl.split(',')[1]);
+    };
+    img.onerror = reject;
+    // Handle both data URLs and raw base64
+    img.src = base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+  });
+};
+
+/**
+ * Normalizes image format - ensures we have clean base64 without data URL prefix
+ */
+export const normalizeBase64 = (base64: string): string => {
+  if (base64.includes(',')) {
+    return base64.split(',')[1];
+  }
+  return base64;
+};
+
+// Crop Image Utility (now returns PNG for quality preservation)
 export const cropBase64Image = async (base64: string, box_2d: [number, number, number, number]): Promise<string> => {
   return new Promise((resolve, reject) => {
       const img = new Image();
@@ -119,9 +186,12 @@ export const cropBase64Image = async (base64: string, box_2d: [number, number, n
           if (!ctx) { reject(new Error('Canvas context failed')); return; }
           
           ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg').split(',')[1]);
+          // Return PNG for quality preservation
+          resolve(canvas.toDataURL('image/png').split(',')[1]);
       };
       img.onerror = reject;
-      img.src = `data:image/jpeg;base64,${base64}`;
+      // Handle both PNG and JPEG input
+      const normalizedBase64 = normalizeBase64(base64);
+      img.src = `data:image/png;base64,${normalizedBase64}`;
   });
 };

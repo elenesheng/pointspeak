@@ -80,29 +80,49 @@ export const analyzeRoomSpace = async (base64Image: string): Promise<DetailedRoo
             3. Generate 4 HIGH-VALUE INSIGHTS.
 
             --- IF 2D FLOOR PLAN DETECTED ---
-            **CRITICAL:** Do NOT output generic lists. You must analyze the specific geometry of THIS plan.
+            **CRITICAL:** You are an expert architect analyzing THIS specific floor plan. Do NOT output generic lists.
             
-            STEP 1: ANALYZE GEOMETRY
-            - Does it have open spaces? (Suggest: Industrial Loft, Modern Open-Plan)
-            - Is it compartmentalized/cozy? (Suggest: Traditional, French Country, Cottage)
-            - Does it have large glass sections/balconies? (Suggest: Coastal, Biophilic, Japandi)
-            - Is it symmetrical/formal? (Suggest: Neoclassical, Mid-Century Modern)
+            STEP 1: DEEP GEOMETRIC ANALYSIS
+            Analyze the actual floor plan geometry:
+            - Room proportions and alignment (symmetrical vs. organic)
+            - Spatial relationships (open vs. compartmentalized)
+            - Natural light sources (windows, openings, orientation)
+            - Traffic flow patterns and functional zones
+            - Structural elements (load-bearing walls, columns)
+            - Plumbing locations (kitchen, bathrooms - CRITICAL: these cannot be moved)
+            - Room sizes and their optimal functions
 
-            STEP 2: GENERATE 4 DISTINCT VISUALIZATION STYLES (Insights)
-            For each style, provide:
-            1. A description of why it fits the geometry.
-            2. A "Master Prompt" in the suggestions that the user can copy to apply this style.
-            3. A "system_instruction" that acts as a rendering preset.
+            STEP 2: STRUCTURAL CONSTRAINT IDENTIFICATION
+            Identify what CANNOT be changed:
+            - Kitchen plumbing walls (sink, dishwasher locations)
+            - Bathroom plumbing walls (toilet, sink, shower locations)
+            - Load-bearing walls (typically exterior and central support walls)
+            - HVAC and electrical constraints
+            - Structural columns and beams
+
+            STEP 3: INTELLIGENT STYLE RECOMMENDATIONS
+            Based on the geometry analysis, recommend styles that enhance the plan's natural characteristics:
+            - Open spaces → Modern, Industrial, Minimalist (enhance openness)
+            - Compartmentalized → Traditional, Cottage, French Country (enhance coziness)
+            - Large windows/glass → Coastal, Biophilic, Japandi (enhance natural light)
+            - Symmetrical/formal → Neoclassical, Mid-Century Modern (enhance structure)
+            - Small spaces → Scandinavian, Minimalist (maximize perceived space)
             
-            Example Insight Structure (Dynamic):
-            - Title: "Style: [Style Name based on geometry]"
-            - Description: "This layout features [Specific Geometry Element], which suits [Style] because [Reason]."
-            - Suggestions: [
-                "Apply [Style] Style to this plan", 
-                "Render this floor plan in [Style] style with [Material] floors and realistic lighting", 
-                "Visualize with [Material] details"
-              ]
-            - System Instruction: "CMD: TEXTURE_OVERLAY. STYLE: [NAME]. PALETTE: [COLORS]. WALLS: PRESERVE_BLACK. LIGHTING: PHOTOREALISTIC."
+            For each recommended style, explain WHY it fits THIS specific geometry.
+
+            STEP 4: STRUCTURAL MODIFICATION SUGGESTIONS (IF APPROPRIATE)
+            Only suggest wall removals for:
+            - Non-load-bearing interior partitions
+            - Walls that do NOT contain plumbing
+            - Walls that improve flow without compromising structure
+            Always explain the benefit and verify it's safe.
+
+            STEP 5: GENERATE 4 DISTINCT INSIGHTS
+            Each insight should be:
+            - Title: Specific recommendation based on analysis
+            - Description: Why this works for THIS plan's geometry
+            - Suggestions: Actionable prompts the user can apply
+            - System Instruction: Technical rendering preset if applicable
 
             --- IF 3D ROOM DETECTED ---
             - Insight 1: Design Critique & Alignment Check.

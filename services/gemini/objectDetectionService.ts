@@ -14,10 +14,11 @@ const cleanJson = (text: string): string => {
  * Scans the entire image once to detect all objects with bounding boxes.
  * Used for client-side hit testing to avoid API calls on every click.
  */
-export const scanImageForObjects = async (base64Image: string): Promise<IdentifiedObject[]> => {
+export const scanImageForObjects = async (base64Image: string, skipCache: boolean = false): Promise<IdentifiedObject[]> => {
   // Fix: Use length and tail to ensure uniqueness.
   const uniqueId = `${base64Image.length}_${base64Image.slice(-30)}`;
-  const cacheKey = generateCacheKey('fullScan_v6_rooms_objects', uniqueId);
+  // Skip cache for post-edit scans to ensure fresh detection
+  const cacheKey = skipCache ? null : generateCacheKey('fullScan_v6_rooms_objects', uniqueId);
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
@@ -78,7 +79,7 @@ export const scanImageForObjects = async (base64Image: string): Promise<Identifi
       console.warn("Failed to parse scan result", e);
       return [];
     }
-  }, cacheKey);
+  }, cacheKey || undefined);
 };
 
 // Kept for backward compatibility or specific fallbacks if needed.

@@ -2,6 +2,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
 import { getApiKey } from "../../utils/apiUtils";
+import { convertToPNG, normalizeBase64 } from "../../utils/imageProcessing";
 import { IdentifiedObject } from "../../types/spatial.types";
 
 // Helper for extracting base64
@@ -131,8 +132,11 @@ A photorealistic 3D interior image that is a faithful projection of the selected
         }
       });
       
-      const finalImage = extractBase64(response);
-      return [finalImage];
+      const jpegImageBase64 = extractBase64(response);
+      // Convert API response (JPEG) to PNG for lossless internal storage
+      const jpegBase64 = normalizeBase64(jpegImageBase64);
+      const pngBase64 = await convertToPNG(jpegBase64);
+      return [`data:image/png;base64,${pngBase64}`];
 
   } catch (e) {
       console.error("Render failed", e);

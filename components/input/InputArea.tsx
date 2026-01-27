@@ -54,7 +54,8 @@ export const InputArea: React.FC<InputAreaProps> = ({
   const rooms = detectedObjects.filter(o => o.category === 'Structure');
   
   // Show dropdown if it's a plan, a render, or if we detected multiple rooms (complex scene)
-  const showRoomDropdown = (isPlan || isRenderedView || rooms.length > 1) && rooms.length > 0;
+  // Temporarily hidden
+  const showRoomDropdown = false; // (isPlan || isRenderedView || rooms.length > 1) && rooms.length > 0;
 
   const toggleHierarchy = (useWhole: boolean) => {
     if (!selectedObject || !selectedObject.whole_object || !selectedObject.specific_part) return;

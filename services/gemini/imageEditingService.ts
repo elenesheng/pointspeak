@@ -4,6 +4,7 @@ import { IntentTranslation } from "../../types/ai.types";
 import { DetailedRoomAnalysis, IdentifiedObject } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
 import { getApiKey } from "../../utils/apiUtils";
+import { convertToJPEG, convertToPNG, normalizeBase64 } from "../../utils/imageProcessing";
 
 export const performImageEdit = async (
   currentImageBase64: string,
@@ -111,12 +112,15 @@ Follow the original image content exactly. Where uncertain, preserve the origina
     
     console.log(`[${preferredModelId}] Executing Edit...`);
 
-    // 6. Prepare Payload (Base64 Mode)
+    // 6. Prepare Payload - Convert PNG to JPEG for API (API may require JPEG)
+    // Convert internal PNG storage to JPEG only for API call to prevent quality loss
+    const currentImageJPEG = await convertToJPEG(normalizeBase64(currentImageBase64));
     const parts: any[] = [
-      { inlineData: { mimeType: 'image/jpeg', data: currentImageBase64 } }
+      { inlineData: { mimeType: 'image/jpeg', data: currentImageJPEG } }
     ];
     if (referenceImageBase64) {
-      parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceImageBase64 } });
+      const refImageJPEG = await convertToJPEG(normalizeBase64(referenceImageBase64));
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: refImageJPEG } });
     }
     parts.push({ text: fullPrompt });
 
@@ -134,20 +138,35 @@ Follow the original image content exactly. Where uncertain, preserve the origina
       } 
     });
 
-    // 8. Extract Image
+    // 8. Extract Image and Convert to PNG for internal storage (lossless)
+    let resultBase64: string | null = null;
+    
     // Check inline data first
     for (const part of response.candidates?.[0]?.content?.parts || []) {
-        if (part.inlineData?.data) return `data:image/jpeg;base64,${part.inlineData.data}`;
+        if (part.inlineData?.data) {
+          resultBase64 = part.inlineData.data;
+          break;
+        }
     }
 
     // Check text for embedded base64 (fallback)
-    const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (textPart) {
-      const base64Match = textPart.match(/data:image\/[a-zA-Z]*;base64,([^\"]*)/);
-      if (base64Match && base64Match[1]) return `data:image/jpeg;base64,${base64Match[1]}`;
+    if (!resultBase64) {
+      const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (textPart) {
+        const base64Match = textPart.match(/data:image\/[a-zA-Z]*;base64,([^\"]*)/);
+        if (base64Match && base64Match[1]) {
+          resultBase64 = base64Match[1];
+        }
+      }
     }
     
-    throw new Error("No image generated.");
+    if (!resultBase64) {
+      throw new Error("No image generated.");
+    }
+    
+    // Convert API response (JPEG) to PNG for lossless internal storage
+    const pngBase64 = await convertToPNG(resultBase64);
+    return `data:image/png;base64,${pngBase64}`;
 
   } catch (error: any) {
     console.warn(`Edit failed with ${preferredModelId}: ${error.message}`);

@@ -6,6 +6,8 @@ import { IntentTranslation } from '../types/ai.types';
 import { mapApiError } from '../utils/errorHandler';
 import { GEMINI_CONFIG } from '../config/gemini.config';
 import { useSpatialStore } from '../store/spatialStore';
+import { useLearningStore } from '../store/learningStore';
+import { convertToJPEG, normalizeBase64 } from '../utils/imageProcessing';
 
 // Services
 import { analyzeRoomSpace, updateInsightsAfterEdit } from '../services/gemini/roomAnalysisService';
@@ -76,6 +78,7 @@ const smartMergeObjects = (
 
 export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const store = useSpatialStore();
+  const learningStore = useLearningStore();
   const { currentVersionId, versions, versionOrder } = store;
   
   const [status, setStatus] = useState<AppStatus>('Idle');
@@ -97,7 +100,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const scannedObjects = store.getCurrentObjects();
   const selectedObject = store.getSelectedObject();
   const roomAnalysis = currentSnapshot?.roomAnalysis || null;
-  const generatedImage = (versionOrder.length > 1 && currentSnapshot) ? `data:image/jpeg;base64,${currentSnapshot.base64}` : null;
+  // Images are stored as PNG internally, but display works with both formats
+  const generatedImage = (versionOrder.length > 1 && currentSnapshot) ? `data:image/png;base64,${currentSnapshot.base64}` : null;
   const currentWorkingImage = currentSnapshot?.base64 || null;
   const currentEditIndex = currentVersionId ? versionOrder.indexOf(currentVersionId) : -1;
 
@@ -135,9 +139,11 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     setIsProcessing(true);
 
     try {
+      // Convert PNG to JPEG for API calls (API services expect JPEG)
+      const jpegBase64 = await convertToJPEG(normalizeBase64(base64));
       const [analysis, objects] = await Promise.all([
-        analyzeRoomSpace(base64),
-        scanImageForObjects(base64)
+        analyzeRoomSpace(jpegBase64),
+        scanImageForObjects(jpegBase64)
       ]);
 
       if (currentOpId !== operationIdRef.current) return;
@@ -253,7 +259,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     setActiveRefImage(referenceBase64);
 
     try {
-      const desc = await analyzeReferenceImage(referenceBase64);
+      // Convert PNG to JPEG for API call
+      const jpegBase64 = await convertToJPEG(normalizeBase64(referenceBase64));
+      const desc = await analyzeReferenceImage(jpegBase64);
       if (currentOpId !== operationIdRef.current) return null;
       setActiveRefDesc(desc);
       addLog(`✓ Reference analyzed: ${desc}`, 'success');
@@ -315,9 +323,10 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
        setEstimatedTime(prev => Math.max(0, prev - 1));
     }, 1000);
 
+    let translation: IntentTranslation | undefined = undefined;
+    let targetObject: IdentifiedObject | undefined = undefined;
+    
     try {
-      let translation: IntentTranslation;
-      let targetObject: IdentifiedObject | undefined = undefined;
 
       // Target Identification
       if (pins.length === 2 && !overrideData) {
@@ -349,8 +358,10 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       if (forceOverride && overrideData) {
         translation = overrideData.forceAction;
       } else {
+        // Convert PNG to JPEG for API call
+        const jpegWorkingBase64 = await convertToJPEG(normalizeBase64(workingBase64));
         translation = await translateIntentWithSpatialAwareness(
-          workingBase64,
+          jpegWorkingBase64,
           userText,
           effectiveSelectedObject,
           roomAnalysis,
@@ -405,10 +416,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         setStatus('Refining object detection...');
         const dirtyRegion = calculateDirtyRegion(targetObject || effectiveSelectedObject, pins);
         
-        // Scan new image
+        // Scan new image - convert PNG to JPEG for API calls
+        // Skip cache for post-edit scans to ensure fresh object detection
+        const jpegPureBase64 = await convertToJPEG(normalizeBase64(pureBase64));
         const [newInsights, newObjectsFull] = await Promise.all([
-            updateInsightsAfterEdit(pureBase64, roomAnalysis, translation.interpreted_intent),
-            scanImageForObjects(pureBase64)
+            updateInsightsAfterEdit(jpegPureBase64, roomAnalysis, translation.interpreted_intent),
+            scanImageForObjects(jpegPureBase64, true) // Skip cache for fresh detection
         ]);
         
         if (currentOpId !== operationIdRef.current) return;
@@ -432,12 +445,24 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         selectedObjectId: effectiveSelectedObject?.id || null
       });
 
+      // Record success for learning
+      learningStore.recordSuccess(translation.interpreted_intent, roomAnalysis.room_type);
+      
       addLog('✓ Image successfully edited', 'success');
       return pureBase64;
 
     } catch (err) {
       if (currentOpId !== operationIdRef.current) return;
       const appErr = mapApiError(err);
+      
+      // Record failure for learning (translation might not be defined if error occurred before parsing)
+      const failedAction = translation?.interpreted_intent || userText || 'Unknown action';
+      learningStore.recordFailure(
+        failedAction,
+        appErr.message,
+        roomAnalysis?.room_type || 'unknown'
+      );
+      
       addLog(`Failed: ${appErr.message}`, 'error');
       return undefined;
     } finally {
@@ -471,10 +496,11 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     versionOrder.forEach((id, i) => {
         const v = versions[id];
         const link = document.createElement('a');
-        link.href = `data:image/jpeg;base64,${v.base64}`;
+        // Export as PNG to preserve quality (or convert to JPEG if preferred)
+        link.href = `data:image/png;base64,${v.base64}`;
         const num = (i + 1).toString().padStart(2, '0');
         const safeDesc = (v.description || v.operation).replace(/[^a-z0-9]/gi, '_').substring(0, 20);
-        link.download = `${num}_${safeDesc}.jpg`;
+        link.download = `${num}_${safeDesc}.png`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);

@@ -23,6 +23,7 @@ import { RoomInsightsPanel } from './components/insights/RoomInsightsPanel';
 import { DesignAssistant } from './components/suggestions/DesignAssistant';
 import { IdentifiedObject } from './types/spatial.types';
 import { IntentTranslation } from './types/ai.types';
+import { useLearningStore } from './store/learningStore';
 
 const App: React.FC = () => {
   const [apiKeySelected, setApiKeySelected] = useState<boolean>(false);
@@ -30,6 +31,7 @@ const App: React.FC = () => {
 
   const { logs, addLog, clearLogs } = useReasoningLogs();
   const { pins, addPin, resetPins } = usePinManagement();
+  const learningStore = useLearningStore();
   
   const { 
     status, roomAnalysis, selectedObject, generatedImage, isProcessing, activeModel, setActiveModel,
@@ -74,9 +76,12 @@ const App: React.FC = () => {
         if (window.aistudio) {
           setApiKeySelected(await window.aistudio.hasSelectedApiKey());
         } else {
-          setApiKeySelected(true); 
+          // When running locally, check if API key is available via env
+          const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
+          setApiKeySelected(!!apiKey || true); // Allow to proceed even without key for local dev
         }
       } catch (e) {
+        console.error('Error checking API key:', e);
         setApiKeySelected(false);
       } finally {
         setIsKeyChecking(false);
@@ -204,10 +209,13 @@ const App: React.FC = () => {
     const activeBase64 = getActiveBase64();
     if (!activeBase64) return;
     
-    // 1. Remove this specific suggestion from the list immediately (visual feedback)
+    // 1. Record like for learning
+    learningStore.recordLike(suggestion, roomAnalysis?.room_type || 'unknown');
+    
+    // 2. Remove this specific suggestion from the list immediately (visual feedback)
     removeSuggestion(suggestion.id);
     
-    // 2. Close panel
+    // 3. Close panel
     setIsAssistantOpen(false);
     
     addLog(`✨ Applying idea: ${suggestion.title}`, 'action');
@@ -222,6 +230,13 @@ const App: React.FC = () => {
     setTimeout(() => {
         handleSend(null, suggestion.suggested_prompt);
     }, 100);
+  };
+
+  const handleDislikeSuggestion = (suggestion: any) => {
+    // Record dislike for learning
+    learningStore.recordDislike(suggestion);
+    removeSuggestion(suggestion.id);
+    addLog(`👎 Noted: Will avoid similar suggestions`, 'thought');
   };
   
   const handleEditSuggestion = (suggestion: any) => {
@@ -330,7 +345,8 @@ const App: React.FC = () => {
 
          // 2. Crop Image
          const croppedBase64 = await cropBase64Image(activeBase64, paddedBox);
-         const croppedDataUrl = `data:image/jpeg;base64,${croppedBase64}`;
+         // cropBase64Image now returns PNG for quality preservation
+         const croppedDataUrl = `data:image/png;base64,${croppedBase64}`;
          
          // 3. Generate Mask for Crop
          const maskDataUrl = await generateBinaryMask(croppedDataUrl);
@@ -490,6 +506,7 @@ const App: React.FC = () => {
             onApply={handleApplySuggestion}
             onDismiss={dismissSuggestion}
             onEditPreview={handleEditSuggestion}
+            onDislike={handleDislikeSuggestion}
           />
       </div>
 

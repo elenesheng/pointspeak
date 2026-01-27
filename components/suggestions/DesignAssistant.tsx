@@ -1,6 +1,6 @@
 
 import React, { useRef } from 'react';
-import { Sparkles, X, ArrowRight, Palette, Move, Trash2, Lightbulb, Pencil } from 'lucide-react';
+import { Sparkles, X, ArrowRight, Palette, Move, Trash2, Lightbulb, Pencil, ThumbsDown } from 'lucide-react';
 import { DesignSuggestion } from '../../types/ai.types';
 import { useClickOutside } from '../../hooks/useClickOutside';
 
@@ -12,6 +12,7 @@ interface DesignAssistantProps {
   onApply: (suggestion: DesignSuggestion) => void;
   onDismiss: (id: string) => void;
   onEditPreview: (suggestion: DesignSuggestion) => void;
+  onDislike?: (suggestion: DesignSuggestion) => void; // New: Dislike handler
 }
 
 export const DesignAssistant: React.FC<DesignAssistantProps> = ({
@@ -21,7 +22,8 @@ export const DesignAssistant: React.FC<DesignAssistantProps> = ({
   isGenerating,
   onApply,
   onDismiss,
-  onEditPreview
+  onEditPreview,
+  onDislike
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   useClickOutside(panelRef, () => {
@@ -80,6 +82,15 @@ export const DesignAssistant: React.FC<DesignAssistantProps> = ({
                  >
                     <Pencil className="w-3 h-3" />
                  </button>
+                 {onDislike && (
+                   <button 
+                     onClick={(e) => { e.stopPropagation(); onDislike(suggestion); }}
+                     className="p-1.5 bg-slate-800 hover:bg-orange-900/50 rounded-lg text-slate-400 hover:text-orange-400 transition-colors border border-slate-700 hover:border-orange-800"
+                     title="Dislike - helps AI learn your preferences"
+                   >
+                      <ThumbsDown className="w-3 h-3" />
+                   </button>
+                 )}
                  <button 
                    onClick={(e) => { e.stopPropagation(); onDismiss(suggestion.id); }}
                    className="p-1.5 bg-slate-800 hover:bg-rose-900/50 rounded-lg text-slate-400 hover:text-rose-400 transition-colors border border-slate-700 hover:border-rose-800"

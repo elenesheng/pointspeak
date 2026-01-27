@@ -4,6 +4,7 @@ import { DesignSuggestion } from '../types/ai.types';
 import { DetailedRoomAnalysis, IdentifiedObject } from '../types/spatial.types';
 import { generateDesignSuggestions } from '../services/gemini/suggestionService';
 import { ReasoningLogType } from '../types/ui.types';
+import { useLearningStore } from '../store/learningStore';
 
 export const useSuggestions = (
   addLog: (content: string, type: ReasoningLogType) => void
@@ -11,6 +12,7 @@ export const useSuggestions = (
   const [suggestions, setSuggestions] = useState<DesignSuggestion[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const learningStore = useLearningStore();
   
   // Cache key to prevent regeneration on same state
   const lastContextRef = useRef<string>("");
@@ -45,11 +47,19 @@ export const useSuggestions = (
     }
 
     try {
+      // Get learning context for personalized suggestions
+      const learningContext = {
+        stylePreferences: learningStore.getStylePreferences(),
+        avoidedActions: learningStore.getAvoidedActions(),
+        contextualInsights: learningStore.getContextualInsights(roomAnalysis.room_type, !!roomAnalysis.is_2d_plan)
+      };
+      
       const results = await generateDesignSuggestions(
         imageBase64,
         roomAnalysis,
         detectedObjects,
-        userGoal === 'auto-refresh' ? "Improve this room" : userGoal
+        userGoal === 'auto-refresh' ? "Improve this room" : userGoal,
+        learningContext
       );
       
       if (results.length > 0) {
