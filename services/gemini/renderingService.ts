@@ -18,7 +18,6 @@ const extractBase64 = (response: any): string => {
     throw new Error("No image generated.");
 };
 
-// MAIN RENDER FUNCTION
 export const generateMultiAngleRender = async (
   planBase64: string,
   maskBase64: string,
