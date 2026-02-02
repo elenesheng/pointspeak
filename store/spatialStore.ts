@@ -16,20 +16,23 @@ export interface VersionSnapshot {
 
 interface SpatialState {
   versions: Record<string, VersionSnapshot>;
-  versionOrder: string[]; // IDs in chronological order
+  versionOrder: string[];
   currentVersionId: string | null;
-  
+
   // Actions
   initialize: (base64: string, objects: IdentifiedObject[], analysis: DetailedRoomAnalysis | null) => void;
   addVersion: (snapshotData: Omit<VersionSnapshot, 'id' | 'timestamp'>) => void;
   jumpToVersion: (index: number) => void;
   setSelectedObject: (id: string | null) => void;
   updateCurrentObjects: (objects: IdentifiedObject[]) => void;
-  
+  updateCurrentVersion: (updates: Partial<VersionSnapshot>) => void;
+  reset: () => void;
+
   // Getters
   getCurrentSnapshot: () => VersionSnapshot | null;
   getCurrentObjects: () => IdentifiedObject[];
   getSelectedObject: () => IdentifiedObject | null;
+  getOriginalImage: () => string | null;
 }
 
 export const useSpatialStore = create<SpatialState>((set, get) => ({
@@ -45,8 +48,8 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
       base64,
       operation: 'Original',
       description: 'Original Upload',
-      objects,
-      roomAnalysis: analysis,
+      objects: [...objects], // Create new array
+      roomAnalysis: analysis ? { ...analysis } : null, // Create new object if exists
       selectedObjectId: null
     };
     
@@ -62,7 +65,10 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
     const snapshot: VersionSnapshot = {
       ...data,
       id,
-      timestamp: new Date()
+      timestamp: new Date(),
+      // Ensure arrays/objects are new references
+      objects: [...(data.objects || [])],
+      roomAnalysis: data.roomAnalysis ? { ...data.roomAnalysis } : null
     };
     
     set(state => {
@@ -104,32 +110,82 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
   },
   
   updateCurrentObjects: (objects) => {
-    set(state => {
+    set((state) => {
       if (!state.currentVersionId) return state;
       const currentSnapshot = state.versions[state.currentVersionId];
-      const updatedSnapshot = { ...currentSnapshot, objects };
-      return {
-        versions: { ...state.versions, [state.currentVersionId]: updatedSnapshot }
+      // Create new array reference to trigger re-renders
+      const updatedSnapshot = { 
+        ...currentSnapshot, 
+        objects: [...objects] // New array reference
       };
+      return {
+        versions: { ...state.versions, [state.currentVersionId]: updatedSnapshot },
+      };
+    });
+  },
+
+  updateCurrentVersion: (updates: Partial<VersionSnapshot>) => {
+    set((state) => {
+      if (!state.currentVersionId) return state;
+      const currentVersion = state.versions[state.currentVersionId];
+      if (!currentVersion) return state;
+      
+      const updatedSnapshot = {
+        ...currentVersion,
+        ...updates,
+        // Ensure nested objects are new references
+        objects: updates.objects ? [...updates.objects] : currentVersion.objects,
+        roomAnalysis: updates.roomAnalysis 
+          ? (updates.roomAnalysis ? { ...updates.roomAnalysis } : null)
+          : currentVersion.roomAnalysis,
+      };
+      
+      return {
+        versions: {
+          ...state.versions,
+          [state.currentVersionId]: updatedSnapshot,
+        },
+      };
+    });
+  },
+
+  reset: () => {
+    set({
+      versions: {},
+      versionOrder: [],
+      currentVersionId: null,
     });
   },
 
   getCurrentSnapshot: () => {
     const state = get();
-    return state.currentVersionId ? state.versions[state.currentVersionId] : null;
+    if (!state.currentVersionId) return null;
+    // Return reference directly - Zustand selectors handle re-renders
+    return state.versions[state.currentVersionId] || null;
   },
 
   getCurrentObjects: () => {
     const state = get();
     if (!state.currentVersionId) return [];
-    return state.versions[state.currentVersionId].objects || [];
+    // Return reference directly - Zustand selectors handle re-renders
+    return state.versions[state.currentVersionId]?.objects || [];
   },
 
   getSelectedObject: () => {
     const state = get();
     if (!state.currentVersionId) return null;
     const snap = state.versions[state.currentVersionId];
-    if (!snap.selectedObjectId) return null;
+    if (!snap?.selectedObjectId) return null;
+    // Return reference directly - Zustand selectors handle re-renders
     return snap.objects.find(o => o.id === snap.selectedObjectId) || null;
+  },
+
+  getOriginalImage: () => {
+    const state = get();
+    // Get the first version (original upload)
+    if (state.versionOrder.length === 0) return null;
+    const originalVersionId = state.versionOrder[0];
+    const originalVersion = state.versions[originalVersionId];
+    return originalVersion ? originalVersion.base64 : null;
   }
 }));

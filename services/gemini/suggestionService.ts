@@ -1,9 +1,56 @@
+import { GoogleGenAI } from '@google/genai';
+import { GEMINI_CONFIG } from '../../config/gemini.config';
+import { getApiKey, withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
+import { DesignSuggestion, OperationType } from '../../types/ai.types';
+import { DetailedRoomAnalysis, IdentifiedObject } from '../../types/spatial.types';
+import { getGeminiCacheName, getLearnedPatternsForOperation, getInlineContext } from './contextCacheService';
+import { getPresetForOperation } from '../../config/modelConfigs';
+import { build2DPlanStylePrompt } from '../../config/prompts/suggestions/2d-plan';
+import { build3DRoomImprovementPrompt, buildObjectSpecificPrompt } from '../../config/prompts/suggestions/3d-room';
 
-import { GoogleGenAI } from "@google/genai";
-import { DetailedRoomAnalysis, IdentifiedObject } from "../../types/spatial.types";
-import { DesignSuggestion } from "../../types/ai.types";
-import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry } from "../../utils/apiUtils";
+// Unified suggestion types
+export type SuggestionMode = '2d-plan-style' | '3d-room-improvement' | '3d-object-specific';
+
+export interface SuggestionContext {
+  mode: SuggestionMode;
+  imageBase64: string;
+  roomAnalysis: DetailedRoomAnalysis;
+  detectedObjects: IdentifiedObject[];
+  userGoal: string;
+  learningContext?: {
+    stylePreferences: string[];
+    avoidedActions: string[];
+    contextualInsights: string;
+  };
+}
+
+export interface LearningContext {
+  stylePreferences?: string[];
+  avoidedActions?: string[];
+  contextualInsights?: string;
+}
+
+export interface FloorPlanStyle {
+  id: string;
+  name: string;
+  description: string;
+  why_fits: string;
+  confidence: number;
+  preview_prompt: string;
+  characteristics: string[];
+}
+
+interface SuggestionRaw {
+  title?: string;
+  description?: string;
+  action_type?: OperationType;
+  target_object_name?: string;
+  suggested_prompt?: string;
+  icon_hint?: 'color' | 'layout' | 'style' | 'remove';
+  confidence?: number;
+  characteristics?: string[];
+  why_fits?: string;
+}
 
 const cleanJson = (text: string): string => {
   let clean = text.trim();
@@ -11,150 +58,58 @@ const cleanJson = (text: string): string => {
   return clean.trim();
 };
 
-export const generateDesignSuggestions = async (
-  imageBase64: string,
-  roomAnalysis: DetailedRoomAnalysis,
-  detectedObjects: IdentifiedObject[],
-  userGoal: string = "Improve the room's design",
-  learningContext?: {
-    stylePreferences?: string[];
-    avoidedActions?: string[];
-    contextualInsights?: string;
-  }
+/**
+ * UNIFIED suggestion generator
+ * Automatically detects context and generates appropriate suggestions
+ */
+export const generateSuggestions = async (
+  context: SuggestionContext
 ): Promise<DesignSuggestion[]> => {
-  // Timestamp ensures fresh results on re-roll
-  const cacheKey = `suggestions_${imageBase64.length}_${userGoal}_${Math.floor(Date.now() / 1000)}`; 
-  const isPlan = roomAnalysis.is_2d_plan;
-  
-  const stylePreferences = learningContext?.stylePreferences || [];
-  const avoidedActions = learningContext?.avoidedActions || [];
-  const contextualInsights = learningContext?.contextualInsights || '';
+  const { mode, imageBase64, roomAnalysis, detectedObjects, userGoal, learningContext } = context;
+
+  // Generate cache key based on image + mode + objects
+  const imageHash = `${imageBase64.slice(0, 50)}_${imageBase64.length}`;
+  const objectsHash = detectedObjects.map(o => o.name).join(',');
+  const cacheKey = generateCacheKey(
+    `suggestions_${mode}`,
+    imageHash,
+    objectsHash,
+    userGoal
+  );
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+    // Build mode-specific prompt
+    const prompt = buildPromptForMode(mode, roomAnalysis, detectedObjects, userGoal, learningContext);
+
+    // Get cache name for reasoning model (supports caching)
+    const cacheName = await getGeminiCacheName(GEMINI_CONFIG.MODELS.REASONING, true);
     
-    // Shuffle objects to encourage variety
-    const shuffledObjects = [...detectedObjects].sort(() => 0.5 - Math.random());
-    const objectsStr = shuffledObjects.slice(0, 8).map(o => `${o.name} (${o.category})`).join(', ');
+    const preset = mode === '2d-plan-style' 
+      ? getPresetForOperation('SUGGESTION_2D_PLAN')
+      : getPresetForOperation('SUGGESTION_3D_ROOM');
     
-    const prompt = isPlan ? `
-    ROLE: Expert Architectural & Space Planning Consultant with deep understanding of structural constraints.
-    CONTEXT: User has uploaded a 2D FLOOR PLAN.
-    TASK: Analyze the floor plan geometry, alignment, walls, rooms, and space to provide intelligent suggestions.
-    GOAL: "${userGoal}"
-
-    CRITICAL ANALYSIS REQUIREMENTS:
-    1. FLOOR PLAN GEOMETRY ANALYSIS:
-       - Analyze room proportions, alignment, and spatial relationships
-       - Identify open spaces vs. compartmentalized areas
-       - Detect symmetry, formality, and flow patterns
-       - Assess natural light sources (windows, openings)
-       - Evaluate traffic flow and functional zones
-
-    2. STRUCTURAL CONSTRAINTS (CRITICAL - NEVER VIOLATE):
-       - KITCHEN: Plumbing fixtures (sink, dishwasher) CANNOT be moved. Walls with plumbing are structural.
-       - BATHROOM: All plumbing (toilet, sink, shower) CANNOT be relocated. These walls are load-bearing.
-       - Identify load-bearing walls vs. non-load-bearing partitions
-       - Respect HVAC, electrical, and structural requirements
-
-    3. INTELLIGENT SUGGESTIONS BASED ON ANALYSIS:
-       - If open space detected: Suggest styles that enhance openness (Modern, Industrial, Minimalist)
-       - If compartmentalized: Suggest cozy styles (Traditional, Cottage, French Country)
-       - If large windows/glass: Suggest light-enhancing styles (Coastal, Biophilic, Japandi)
-       - If symmetrical/formal: Suggest structured styles (Neoclassical, Mid-Century Modern)
-       - Wall removal suggestions ONLY for non-load-bearing, non-plumbing walls
-       - Suggest optimal room functions based on size and location
-
-    4. STYLE ANTICIPATION:
-       - Based on geometry, anticipate which styles would work best
-       - Consider room size, shape, and natural features
-       - Suggest complementary color palettes and materials
-
-    ${learningContext ? `USER LEARNING CONTEXT: ${learningContext}` : ''}
-    ${stylePreferences.length > 0 ? `User prefers these styles: ${stylePreferences.join(', ')}` : ''}
-    ${avoidedActions.length > 0 ? `Avoid these actions: ${avoidedActions.slice(0, 3).join('; ')}` : ''}
-
-    SUGGESTION TYPES FOR PLANS:
-    1. Structural Mod (ONLY non-critical walls): "Remove non-load-bearing wall between X and Y"
-    2. Visualization Style (geometry-appropriate): "Visualize in [Style] style - this layout's [geometry feature] suits this style because..."
-    3. Layout Optimization: "Add [element] to improve [function] in this [room type]"
-    4. Room Function Optimization: "Convert [room] to [function] - this space is ideal because..."
-
-    OUTPUT JSON SCHEMA:
-    [
-      {
-        "title": "Short Title",
-        "description": "Why this change works for this layout.",
-        "action_type": "EDIT",
-        "target_object_name": "Structure", 
-        "suggested_prompt": "Precise prompt to generate the visualization or edit",
-        "icon_hint": "layout" | "style" | "remove"
-      }
-    ]
-    ` : `
-    ROLE: Expert Interior Design Consultant with deep aesthetic analysis capabilities.
-    CONTEXT: 3D ROOM PHOTO.
-    TASK: Analyze the room's current style, color palette, materials, lighting, and spatial relationships. Provide 6 intelligent, personalized design suggestions.
-    GOAL: "${userGoal}"
+    const config: any = {
+      responseMimeType: 'application/json',
+      temperature: preset.temperature,
+    };
     
-    DEEP STYLE ANALYSIS REQUIRED:
-    1. CURRENT STYLE ASSESSMENT:
-       - Identify existing style (Modern, Traditional, Eclectic, etc.)
-       - Analyze color palette and harmony
-       - Assess material choices and textures
-       - Evaluate lighting quality and atmosphere
-       - Note spatial relationships and flow
-
-    2. ROOM CONTEXT:
-       - Room Type: ${roomAnalysis.room_type}
-       - Key Objects: ${objectsStr}
-       - Current constraints and opportunities
-
-    3. PERSONALIZED SUGGESTIONS:
-       ${learningContext ? `USER LEARNING CONTEXT: ${learningContext}` : ''}
-       ${stylePreferences.length > 0 ? `User prefers: ${stylePreferences.join(', ')}. Incorporate these preferences naturally.` : ''}
-       ${avoidedActions.length > 0 ? `Avoid: ${avoidedActions.slice(0, 3).join('; ')}` : ''}
-       - Base suggestions on actual room analysis, not generic templates
-       - Consider how suggestions complement existing style
-       - Suggest improvements that enhance the room's character
-
-    DIVERSITY RULES (Generate 6 items):
-    1. Material Swap (e.g. Velvet to Leather)
-    2. Layout/removal (e.g. Declutter X)
-    3. Lighting/Atmosphere
-    4. Color Palette Shift
-    5. Bold Statement Piece
-    6. Architectural/Structural Tweak
-    
-    CONSTRAINTS:
-    - Do NOT suggest impossible moves.
-    - Focus on visual impact.
-    
-    OUTPUT JSON SCHEMA:
-    [
-      {
-        "title": "Short Title",
-        "description": "One sentence explaining why.",
-        "action_type": "EDIT" | "MOVE" | "REMOVE",
-        "target_object_name": "Exact name from detected objects if possible, or new object",
-        "suggested_prompt": "Precise instruction for image generation",
-        "icon_hint": "style" | "layout" | "remove" | "color"
-      }
-    ]
-    `;
+    // Add cached content if available (reasoning models support caching)
+    if (cacheName) {
+      config.cachedContent = cacheName;
+      console.log(`[Design Suggestions] Using cached context: ${cacheName}`);
+    }
 
     const response = await ai.models.generateContent({
       model: GEMINI_CONFIG.MODELS.REASONING,
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
-          { text: prompt }
-        ]
+          { text: prompt },
+        ],
       },
-      config: {
-        responseMimeType: "application/json",
-        temperature: 0.85, 
-      }
+      config,
     });
 
     const text = response.text;
@@ -162,20 +117,278 @@ export const generateDesignSuggestions = async (
 
     try {
       const cleanedText = cleanJson(text);
-      const suggestions = JSON.parse(cleanedText);
-      return suggestions.map((s: any, i: number) => ({
-        id: `sugg_${Date.now()}_${i}`,
-        title: s.title,
-        description: s.description,
-        action_type: s.action_type,
-        target_object_name: s.target_object_name,
-        suggested_prompt: s.suggested_prompt,
-        icon_hint: s.icon_hint,
-        confidence: 0.9
-      }));
+      const parsed = JSON.parse(cleanedText);
+      const suggestions = Array.isArray(parsed) ? parsed : parsed.suggestions || [];
+
+      // Style cards use preview_prompt, regular suggestions use suggested_prompt
+      return suggestions
+        .map((s: any, i: number) => {
+          // Get prompt from either field
+          const prompt = s.preview_prompt || s.suggested_prompt || '';
+          if (!prompt.trim()) {
+            return null; // Filter out later
+          }
+          return {
+            id: `${mode}_${Date.now()}_${i}`,
+            title: s.title || '',
+            description: s.description || '',
+            action_type: s.action_type || 'EDIT',
+            target_object_name: s.target_object_name || 'Room',
+            suggested_prompt: prompt.trim(),
+            icon_hint: s.icon_hint || 'style',
+            confidence: s.confidence || 0.8,
+          };
+        })
+        .filter((s): s is DesignSuggestion => s !== null);
     } catch (e) {
-      console.error("Failed to parse suggestions", e, text);
+      console.error('Failed to parse suggestions', e, text);
       return [];
     }
+  }, cacheKey);
+};
+
+/**
+ * Mode-specific prompt builder
+ */
+function buildPromptForMode(
+  mode: SuggestionMode,
+  roomAnalysis: DetailedRoomAnalysis,
+  detectedObjects: IdentifiedObject[],
+  userGoal: string,
+  learningContext?: SuggestionContext['learningContext']
+): string {
+  // Learning context
+  let learningSection = '';
+  if (learningContext) {
+    if (learningContext.stylePreferences.length > 0) {
+      learningSection += `User prefers: ${learningContext.stylePreferences.slice(0, 5).join(', ')}\n`;
+    }
+    if (learningContext.avoidedActions.length > 0) {
+      learningSection += `Avoid: ${learningContext.avoidedActions.slice(0, 3).join(', ')}\n`;
+    }
+    if (learningContext.contextualInsights) {
+      learningSection += `Context: ${learningContext.contextualInsights}\n`;
+    }
+  }
+
+  // Add learned patterns
+  const learnedPatterns = getInlineContext();
+  if (learnedPatterns) {
+    learningSection += `\nLearned patterns:\n${learnedPatterns}\n`;
+  }
+
+  // Add operation-specific learned patterns
+  const operationTypes: OperationType[] = ['MOVE', 'REMOVE', 'STYLE', 'EDIT', 'INTERNAL_MODIFY'];
+  let operationPatterns = '';
+  operationTypes.forEach(opType => {
+    const learned = getLearnedPatternsForOperation(opType);
+    if (learned.successfulPatterns.length > 0 || learned.failedPatterns.length > 0) {
+      operationPatterns += `\n${opType}:\n`;
+      if (learned.successfulPatterns.length > 0) {
+        operationPatterns += `  ✓ Use: ${learned.successfulPatterns.slice(0, 1).join('; ')}\n`;
+      }
+      if (learned.failedPatterns.length > 0) {
+        operationPatterns += `  ✗ Avoid: ${learned.failedPatterns.slice(0, 1).join('; ')}\n`;
+      }
+    }
+  });
+  if (operationPatterns) {
+    learningSection += `\nLEARNED PROMPT PATTERNS (use successful patterns, avoid failed ones):${operationPatterns}`;
+  }
+
+  if (mode === '2d-plan-style') {
+    // Floor plan style cards
+    const rooms = detectedObjects?.filter(obj => 
+      obj.category === 'Structure' && 
+      /room|bedroom|kitchen|living|bathroom|dining|office|study/i.test(obj.name)
+    ) || [];
+    
+    const isMultiRoom = rooms.length > 1;
+    const scopeText = isMultiRoom 
+      ? 'the ENTIRE floor plan (all rooms together as one cohesive design)'
+      : 'this floor plan';
+
+    return build2DPlanStylePrompt({
+      scopeText,
+      isMultiRoom,
+      rooms,
+      learningSection,
+    });
+
+  } else if (mode === '3d-room-improvement') {
+    // General room improvement suggestions
+    const isPlan = roomAnalysis.is_2d_plan;
+    const shuffledObjects = [...detectedObjects].sort(() => 0.5 - Math.random());
+    const objectsStr = shuffledObjects
+      .slice(0, 8)
+      .map((o) => `${o.name} (${o.category})`)
+      .join(', ');
+
+    return build3DRoomImprovementPrompt({
+      userGoal,
+      isPlan,
+      roomType: roomAnalysis.room_type,
+      objectsStr,
+      learningSection,
+    });
+  } else {
+    // Object-specific suggestions (fallback)
+    return buildObjectSpecificPrompt(detectedObjects, learningSection);
+  }
+}
+
+/**
+ * Smart mode detection
+ */
+export function detectSuggestionMode(
+  roomAnalysis: DetailedRoomAnalysis,
+  detectedObjects: IdentifiedObject[],
+  hasAppliedStyle: boolean
+): SuggestionMode {
+  // If it's a 2D plan and user hasn't applied style yet, show style cards
+  if (roomAnalysis.is_2d_plan && !hasAppliedStyle) {
+    return '2d-plan-style';
+  }
+
+  // If it's a 3D room or plan with style applied, show improvements
+  return '3d-room-improvement';
+}
+
+/**
+ * Backward compatibility wrappers
+ */
+export const generateDesignSuggestions = async (
+  imageBase64: string,
+  roomAnalysis: DetailedRoomAnalysis,
+  detectedObjects: IdentifiedObject[],
+  userGoal: string = "Improve the room's design",
+  learningContext?: LearningContext
+): Promise<DesignSuggestion[]> => {
+  const mode = detectSuggestionMode(roomAnalysis, detectedObjects, false);
+  return generateSuggestions({
+    mode,
+    imageBase64,
+    roomAnalysis,
+    detectedObjects,
+    userGoal,
+    learningContext: learningContext ? {
+      stylePreferences: learningContext.stylePreferences || [],
+      avoidedActions: learningContext.avoidedActions || [],
+      contextualInsights: learningContext.contextualInsights || '',
+    } : undefined,
+  });
+};
+
+export const generateFloorPlanStyleCards = async (
+  imageBase64: string,
+  roomAnalysis: DetailedRoomAnalysis,
+  detectedObjects?: IdentifiedObject[]
+): Promise<FloorPlanStyle[]> => {
+  // Generate cache key
+  const imageHash = `${imageBase64.slice(0, 50)}_${imageBase64.length}`;
+  const objectsHash = (detectedObjects || []).map(o => o.name).join(',');
+  const cacheKey = generateCacheKey(
+    `suggestions_2d-plan-style`,
+    imageHash,
+    objectsHash,
+    'Visualize this floor plan'
+  );
+
+  return withSmartRetry(async () => {
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+    const rooms = detectedObjects?.filter(obj => 
+      obj.category === 'Structure' && 
+      /room|bedroom|kitchen|living|bathroom|dining|office|study/i.test(obj.name)
+    ) || [];
+    
+    const isMultiRoom = rooms.length > 1;
+    const scopeText = isMultiRoom 
+      ? 'the ENTIRE floor plan (all rooms together as one cohesive design)'
+      : 'this floor plan';
+
+    const prompt = buildPromptForMode('2d-plan-style', roomAnalysis, detectedObjects || [], 'Visualize this floor plan', undefined);
+
+    // Get cache name for reasoning model
+    const cacheName = await getGeminiCacheName(GEMINI_CONFIG.MODELS.REASONING, true);
+    
+    const preset = getPresetForOperation('SUGGESTION_2D_PLAN');
+    const config: any = {
+      responseMimeType: 'application/json',
+      temperature: preset.temperature,
+    };
+    
+    if (cacheName) {
+      config.cachedContent = cacheName;
+      console.log(`[Style Cards] Using cached context: ${cacheName}`);
+    }
+
+    const response = await ai.models.generateContent({
+      model: GEMINI_CONFIG.MODELS.REASONING,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
+          { text: prompt },
+        ],
+      },
+      config,
+    });
+
+    const text = response.text;
+    if (!text) {
+      throw new Error('No response from AI for style card generation');
+    }
+
+    const cleanedText = cleanJson(text);
+    let styles: any[];
+    
+    try {
+      const parsed = JSON.parse(cleanedText);
+      styles = Array.isArray(parsed) ? parsed : [];
+    } catch (parseError) {
+      console.error('Failed to parse style cards JSON:', parseError, cleanedText);
+      throw new Error('Failed to parse style cards response');
+    }
+
+    // Validate we got styles
+    if (!Array.isArray(styles) || styles.length === 0) {
+      throw new Error('No styles generated from analysis');
+    }
+
+    // Ensure all required fields are present - CRITICAL: preview_prompt must exist
+    const validatedStyles = styles
+      .filter(s => {
+        const hasPrompt = s.preview_prompt && s.preview_prompt.trim();
+        if (!hasPrompt) {
+          console.warn('[Style Cards] Missing preview_prompt for style:', s.name || 'unnamed');
+        }
+        return s.name && s.description && hasPrompt;
+      })
+      .map((s, i) => {
+        // Ensure preview_prompt is not empty
+        const prompt = s.preview_prompt?.trim() || '';
+        if (!prompt) {
+          console.error('[Style Cards] Empty preview_prompt for style:', s.name);
+        }
+        return {
+          id: `style_${Date.now()}_${i}`,
+          name: s.name || 'Unnamed Style',
+          description: s.description || '',
+          why_fits: s.why_fits || 'Analysis-based recommendation',
+          confidence: typeof s.confidence === 'number' ? s.confidence : 0.7,
+          preview_prompt: prompt, // Use trimmed version, don't default to empty string
+          characteristics: Array.isArray(s.characteristics) ? s.characteristics : [],
+        };
+      });
+
+    if (validatedStyles.length === 0) {
+      console.error('[Style Cards] All styles filtered out - missing preview_prompt in response:', styles);
+      throw new Error('No valid styles after validation - check that preview_prompt is generated');
+    }
+
+    // Log first style to verify prompt exists
+    console.log('[Style Cards] Generated', validatedStyles.length, 'styles. First prompt:', validatedStyles[0]?.preview_prompt?.slice(0, 50));
+
+    return validatedStyles;
   }, cacheKey);
 };

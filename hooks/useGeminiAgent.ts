@@ -1,15 +1,13 @@
-
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { AppStatus, ReasoningLogType, EditHistoryEntry } from '../types/ui.types';
+import { useState, useRef, useCallback, useMemo } from 'react';
+import { AppStatus, ReasoningLogType, ReasoningLogMetadata, EditHistoryEntry } from '../types/ui.types';
 import { DetailedRoomAnalysis, IdentifiedObject, Coordinate } from '../types/spatial.types';
 import { IntentTranslation } from '../types/ai.types';
 import { mapApiError } from '../utils/errorHandler';
 import { GEMINI_CONFIG } from '../config/gemini.config';
 import { useSpatialStore } from '../store/spatialStore';
 import { useLearningStore } from '../store/learningStore';
+import { useShallow } from 'zustand/react/shallow';
 import { convertToJPEG, normalizeBase64 } from '../utils/imageProcessing';
-
-// Services
 import { analyzeRoomSpace, updateInsightsAfterEdit } from '../services/gemini/roomAnalysisService';
 import { scanImageForObjects } from '../services/gemini/objectDetectionService';
 import { translateIntentWithSpatialAwareness } from '../services/gemini/intentParsingService';
@@ -17,69 +15,93 @@ import { performImageEdit } from '../services/gemini/imageEditingService';
 import { analyzeReferenceImage } from '../services/gemini/referenceAnalysisService';
 
 interface UseGeminiAgentProps {
-  addLog: (content: string, type: ReasoningLogType, metadata?: any) => void;
+  addLog: (content: string, type: ReasoningLogType, metadata?: ReasoningLogMetadata) => void;
   pins: Coordinate[];
 }
 
-// Helper: Calculate the bounding box of the edited area
+interface OverrideData {
+  forceAction?: IntentTranslation;
+  forceObject?: IdentifiedObject;
+}
+
+type BoundingBox = [number, number, number, number];
+
 const calculateDirtyRegion = (
-  targetObject?: IdentifiedObject, 
+  targetObject?: IdentifiedObject,
   pins?: Coordinate[]
-): [number, number, number, number] | null => {
+): BoundingBox | null => {
   if (targetObject?.box_2d) {
-    const pad = 50; 
+    const pad = 50;
     return [
       Math.max(0, targetObject.box_2d[0] - pad),
       Math.max(0, targetObject.box_2d[1] - pad),
       Math.min(1000, targetObject.box_2d[2] + pad),
-      Math.min(1000, targetObject.box_2d[3] + pad)
+      Math.min(1000, targetObject.box_2d[3] + pad),
     ];
   }
-  
+
   if (pins && pins.length > 0) {
-     const xs = pins.map(p => p.x);
-     const ys = pins.map(p => p.y);
-     const pad = 100;
-     return [
-       Math.max(0, Math.min(...ys) - pad),
-       Math.max(0, Math.min(...xs) - pad),
-       Math.min(1000, Math.max(...ys) + pad),
-       Math.min(1000, Math.max(...xs) + pad)
-     ];
+    const xs = pins.map((p) => p.x);
+    const ys = pins.map((p) => p.y);
+    const pad = 100;
+    return [
+      Math.max(0, Math.min(...ys) - pad),
+      Math.max(0, Math.min(...xs) - pad),
+      Math.min(1000, Math.max(...ys) + pad),
+      Math.min(1000, Math.max(...xs) + pad),
+    ];
   }
-  
-  return null; 
+
+  return null;
 };
 
-// Helper: Merge old accurate objects with new objects from the dirty region
 const smartMergeObjects = (
-  oldObjects: IdentifiedObject[], 
-  newObjects: IdentifiedObject[], 
-  dirtyRegion: [number, number, number, number] | null
-) => {
+  oldObjects: IdentifiedObject[],
+  newObjects: IdentifiedObject[],
+  dirtyRegion: BoundingBox | null
+): IdentifiedObject[] => {
   if (!dirtyRegion) return newObjects;
 
-  const intersects = (box: [number, number, number, number], region: [number, number, number, number]) => {
-     return !(box[3] < region[1] || box[1] > region[3] || box[2] < region[0] || box[0] > region[2]);
+  const intersects = (box: BoundingBox, region: BoundingBox): boolean => {
+    return !(box[3] < region[1] || box[1] > region[3] || box[2] < region[0] || box[0] > region[2]);
   };
 
-  const survivors = oldObjects.filter(obj => {
-     if (!obj.box_2d) return false; 
-     return !intersects(obj.box_2d, dirtyRegion);
+  const survivors = oldObjects.filter((obj) => {
+    if (!obj.box_2d) return false;
+    return !intersects(obj.box_2d, dirtyRegion);
   });
 
-  const additions = newObjects.filter(obj => {
-     if (!obj.box_2d) return false;
-     return intersects(obj.box_2d, dirtyRegion);
+  const additions = newObjects.filter((obj) => {
+    if (!obj.box_2d) return false;
+    return intersects(obj.box_2d, dirtyRegion);
   });
 
   return [...survivors, ...additions];
 };
 
 export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
-  const store = useSpatialStore();
   const learningStore = useLearningStore();
-  const { currentVersionId, versions, versionOrder } = store;
+  
+  const currentVersionId = useSpatialStore(state => state.currentVersionId);
+  const versions = useSpatialStore(state => state.versions);
+  const versionOrder = useSpatialStore(state => state.versionOrder);
+  
+  const currentSnapshot = currentVersionId ? (versions[currentVersionId] || null) : null;
+  const scannedObjects = currentSnapshot?.objects || [];
+  const selectedObject = currentSnapshot?.selectedObjectId 
+    ? (currentSnapshot.objects.find(o => o.id === currentSnapshot.selectedObjectId) || null)
+    : null;
+  const roomAnalysis = currentSnapshot?.roomAnalysis || null;
+  
+  // Primitives
+  const generatedImage = versionOrder.length > 1 && currentSnapshot 
+    ? `data:image/png;base64,${currentSnapshot.base64}` 
+    : null;
+  const currentWorkingImage = currentSnapshot?.base64 || null;
+  const currentEditIndex = currentVersionId ? versionOrder.indexOf(currentVersionId) : -1;
+  
+  // Store actions (these don't need to trigger re-renders, just need access)
+  const store = useSpatialStore();
   
   const [status, setStatus] = useState<AppStatus>('Idle');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -95,33 +117,36 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   const timerRef = useRef<number | null>(null);
   const operationIdRef = useRef<number>(0);
 
-  // Derived State from Store
-  const currentSnapshot = store.getCurrentSnapshot();
-  const scannedObjects = store.getCurrentObjects();
-  const selectedObject = store.getSelectedObject();
-  const roomAnalysis = currentSnapshot?.roomAnalysis || null;
-  // Images are stored as PNG internally, but display works with both formats
-  const generatedImage = (versionOrder.length > 1 && currentSnapshot) ? `data:image/png;base64,${currentSnapshot.base64}` : null;
-  const currentWorkingImage = currentSnapshot?.base64 || null;
-  const currentEditIndex = currentVersionId ? versionOrder.indexOf(currentVersionId) : -1;
-
-  // Map store versions to UI history format
-  const editHistory: EditHistoryEntry[] = versionOrder.map(id => {
-    const v = versions[id];
-    return {
-      base64: v.base64,
-      timestamp: v.timestamp,
-      operation: v.operation,
-      description: v.description,
-      scannedObjects: v.objects,
-      roomAnalysis: v.roomAnalysis,
-      selectedObject: v.selectedObjectId ? v.objects.find(o => o.id === v.selectedObjectId) : null
-    };
-  });
+  // Map store versions to UI history format (memoized to prevent unnecessary recalculations)
+  const editHistory: EditHistoryEntry[] = useMemo(() => {
+    return versionOrder.map(id => {
+      const v = versions[id];
+      if (!v) {
+        return {
+          base64: '',
+          timestamp: new Date(),
+          operation: '',
+          description: '',
+          scannedObjects: [],
+          roomAnalysis: null,
+          selectedObject: null
+        };
+      }
+      return {
+        base64: v.base64,
+        timestamp: v.timestamp,
+        operation: v.operation,
+        description: v.description,
+        scannedObjects: v.objects,
+        roomAnalysis: v.roomAnalysis,
+        selectedObject: v.selectedObjectId ? v.objects.find(o => o.id === v.selectedObjectId) || null : null
+      };
+    });
+  }, [versionOrder, versions]);
 
   const cancelOperation = useCallback(() => {
     if (!isProcessing) return;
-    operationIdRef.current += 1; // Invalidate current op
+    operationIdRef.current += 1;
     setIsProcessing(false);
     setStatus('Idle');
     setEstimatedTime(0);
@@ -141,12 +166,27 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     try {
       // Convert PNG to JPEG for API calls (API services expect JPEG)
       const jpegBase64 = await convertToJPEG(normalizeBase64(base64));
-      const [analysis, objects] = await Promise.all([
+      
+      // Add timeout to prevent hanging - wrap in Promise.race
+      const scanPromise = Promise.all([
         analyzeRoomSpace(jpegBase64),
         scanImageForObjects(jpegBase64)
       ]);
+      
+      const timeoutPromise = new Promise<[Awaited<ReturnType<typeof analyzeRoomSpace>>, Awaited<ReturnType<typeof scanImageForObjects>>]>((_, reject) => {
+        setTimeout(() => reject(new Error('Scan timeout after 60 seconds')), 60000);
+      });
+      
+      const [analysis, objects] = await Promise.race([
+        scanPromise,
+        timeoutPromise
+      ]);
 
-      if (currentOpId !== operationIdRef.current) return;
+      if (currentOpId !== operationIdRef.current) {
+        setStatus('Ready');
+        setIsProcessing(false);
+        return;
+      }
 
       if (addToHistory) {
          store.addVersion({
@@ -165,7 +205,11 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       addLog(`✓ Detected ${objects.length} interactable objects`, 'success');
 
     } catch (err) {
-      if (currentOpId !== operationIdRef.current) return;
+      if (currentOpId !== operationIdRef.current) {
+        setStatus('Ready');
+        setIsProcessing(false);
+        return;
+      }
       
       const appErr = mapApiError(err);
       console.warn("Room scan failed:", appErr);
@@ -202,8 +246,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     await new Promise(r => setTimeout(r, 50));
     if (currentOpId !== operationIdRef.current) return;
 
-    // Use current objects from store
-    const objects = store.getCurrentObjects();
+    // Use current objects from store (read directly for async operation)
+    const state = useSpatialStore.getState();
+    const objects = state.currentVersionId ? (state.versions[state.currentVersionId]?.objects || []) : [];
     
     let candidates = objects.filter(obj => {
        if (!obj.box_2d) return false;
@@ -278,12 +323,11 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     }
   };
 
-  // 4. Main Execution
   const executeCommand = async (
-    inputBase64: string, 
-    userText: string, 
-    forceOverride: boolean = false, 
-    overrideData?: any,
+    inputBase64: string,
+    userText: string,
+    forceOverride: boolean = false,
+    overrideData?: OverrideData,
     referenceDescription?: string,
     referenceImageBase64?: string
   ): Promise<string | undefined> => {
@@ -333,8 +377,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         const targetX = pins[1].x;
         const targetY = pins[1].y;
         
-        // Hit test against current objects
-        const objects = store.getCurrentObjects();
+        // Hit test against current objects (read directly for async operation)
+        const state = useSpatialStore.getState();
+        const objects = state.currentVersionId ? (state.versions[state.currentVersionId]?.objects || []) : [];
         let targetCandidates = objects.filter(obj => {
            if (!obj.box_2d) return false;
            const [ymin, xmin, ymax, xmax] = obj.box_2d;
@@ -393,6 +438,21 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       setStatus(`Editing Image (${isPro ? 'Pro' : 'Fast'})...` as AppStatus);
       addLog(`⚡ Generating with ${modelName}...`, 'thought');
 
+      // Get original image for quality reference (lossless quality target)
+      // This helps the model maintain quality by seeing the original as a reference
+      const state = useSpatialStore.getState();
+      const originalImage = state.versionOrder.length > 0 
+        ? state.versions[state.versionOrder[0]]?.base64 || null
+        : null;
+      const isUsingOriginalAsReference = !!originalImage && !refImageToUse;
+      const qualityReferenceImage = originalImage || refImageToUse;
+
+      // Get learning context - SMART: Only pass relevant warnings for this operation type
+      const learningContext = learningStore.getLearningContext(translation.operation_type);
+      if (learningContext.warningsForAI.length > 0) {
+        addLog(`🧠 Applying ${learningContext.warningsForAI.length} learned insight(s)`, 'thought');
+      }
+
       const editedImageBase64 = await performImageEdit(
         workingBase64,
         translation, 
@@ -401,54 +461,57 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         activeModel, 
         targetObject,
         refDescToUse || undefined,
-        refImageToUse
+        qualityReferenceImage || null,
+        isUsingOriginalAsReference, // Pass flag to indicate original image reference
+        scannedObjects, // Pass all detected objects for scene context
+        learningContext // Pass learning context for AI behavior adjustment
       );
       
       if (currentOpId !== operationIdRef.current) return;
 
       const pureBase64 = editedImageBase64.startsWith('data:') ? editedImageBase64.split(',')[1] : editedImageBase64;
       
-      // --- POST-EDIT REFINEMENT ---
-      let updatedObjects = scannedObjects; // Start with current objects
-      let updatedInsights = roomAnalysis.insights;
-      
-      if (roomAnalysis) {
-        setStatus('Refining object detection...');
-        const dirtyRegion = calculateDirtyRegion(targetObject || effectiveSelectedObject, pins);
-        
-        // Scan new image - convert PNG to JPEG for API calls
-        // Skip cache for post-edit scans to ensure fresh object detection
-        const jpegPureBase64 = await convertToJPEG(normalizeBase64(pureBase64));
-        const [newInsights, newObjectsFull] = await Promise.all([
-            updateInsightsAfterEdit(jpegPureBase64, roomAnalysis, translation.interpreted_intent),
-            scanImageForObjects(jpegPureBase64, true) // Skip cache for fresh detection
-        ]);
-        
-        if (currentOpId !== operationIdRef.current) return;
-        
-        if (newInsights) updatedInsights = newInsights;
-        
-        if (newObjectsFull) {
-            // Merge logic preserves identity where possible
-            updatedObjects = smartMergeObjects(scannedObjects, newObjectsFull, dirtyRegion);
-            addLog(`✓ Smart Scan: Updated objects in edited region.`, 'thought');
-        }
-      }
-
-      // COMMIT TO STORE (Create New Version)
+      // OPTIMISTIC UPDATE: Commit to store immediately with existing objects
+      // This shows the result instantly, objects will update in background
       store.addVersion({
         base64: pureBase64,
         operation: translation.operation_type,
         description: translation.interpreted_intent,
-        objects: updatedObjects,
-        roomAnalysis: { ...roomAnalysis, insights: updatedInsights },
+        objects: scannedObjects, // Use existing objects immediately
+        roomAnalysis: { ...roomAnalysis }, // Use existing insights
         selectedObjectId: effectiveSelectedObject?.id || null
       });
 
-      // Record success for learning
+      // Record success immediately
       learningStore.recordSuccess(translation.interpreted_intent, roomAnalysis.room_type);
-      
       addLog('✓ Image successfully edited', 'success');
+      
+      // Update objects and insights in background (non-blocking)
+      // This runs after the result is already shown to the user
+      const jpegPureBase64 = await convertToJPEG(normalizeBase64(pureBase64));
+      
+      Promise.all([
+        roomAnalysis ? updateInsightsAfterEdit(jpegPureBase64, roomAnalysis, translation.interpreted_intent) : Promise.resolve(null),
+        scanImageForObjects(jpegPureBase64, true) // Fast mode enabled
+      ]).then(([newInsights, newObjectsFull]) => {
+        // Only update if operation hasn't been cancelled
+        if (currentOpId !== operationIdRef.current) return;
+        
+        // Update current version with new objects and insights
+        if (newObjectsFull && newObjectsFull.length > 0) {
+          store.updateCurrentObjects(newObjectsFull);
+          addLog(`✓ Objects updated (${newObjectsFull.length} detected)`, 'thought');
+        }
+        
+        if (newInsights) {
+          store.updateCurrentVersion({
+            roomAnalysis: { ...roomAnalysis, insights: newInsights }
+          });
+        }
+      }).catch(err => {
+        console.warn('[Background] Object detection failed:', err);
+      });
+
       return pureBase64;
 
     } catch (err) {
@@ -457,11 +520,17 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       
       // Record failure for learning (translation might not be defined if error occurred before parsing)
       const failedAction = translation?.interpreted_intent || userText || 'Unknown action';
-      learningStore.recordFailure(
-        failedAction,
-        appErr.message,
-        roomAnalysis?.room_type || 'unknown'
-      );
+      // Determine failure reason based on error message
+      const errorLower = appErr.message.toLowerCase();
+      let failureReason: 'hallucination' | 'quality' | 'incomplete' | 'other' = 'other';
+      if (errorLower.includes('hallucin') || errorLower.includes('invent')) {
+        failureReason = 'hallucination';
+      } else if (errorLower.includes('quality') || errorLower.includes('blur')) {
+        failureReason = 'quality';
+      } else if (errorLower.includes('incomplete') || errorLower.includes('partial')) {
+        failureReason = 'incomplete';
+      }
+      learningStore.recordFailure(failedAction, failureReason, roomAnalysis?.room_type || 'unknown');
       
       addLog(`Failed: ${appErr.message}`, 'error');
       return undefined;
@@ -477,13 +546,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     }
   };
 
-  const jumpToEdit = useCallback((index: number) => {
-    store.jumpToVersion(index);
-    const snapshot = store.getCurrentSnapshot();
-    if(snapshot) {
-        addLog(`↻ Restored state: ${snapshot.description}`, 'action');
-    }
-  }, [store, addLog]);
+  const jumpToEdit = useCallback(
+    (index: number) => {
+      store.jumpToVersion(index);
+    },
+    [store]
+  );
 
   const undoEdit = useCallback(() => currentEditIndex > 0 && jumpToEdit(currentEditIndex - 1), [currentEditIndex, jumpToEdit]);
   const redoEdit = useCallback(() => currentEditIndex < versionOrder.length - 1 && jumpToEdit(currentEditIndex + 1), [currentEditIndex, versionOrder.length, jumpToEdit]);
@@ -511,9 +579,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     operationIdRef.current += 1;
     setStatus('Idle');
     setIsProcessing(false);
-    // Note: We don't necessarily clear the store here if we want to keep history until explicit upload
-    // But UI reset usually implies clearing state
-    // For now, we rely on performInitialScan to reset the store when a new image is uploaded.
+    setActiveRefImage(null);
+    setActiveRefDesc(null);
+    store.reset();
   };
 
   const setSelectedObjectWrapper = (obj: IdentifiedObject | null) => {

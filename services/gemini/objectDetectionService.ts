@@ -1,51 +1,108 @@
+import { GoogleGenAI } from '@google/genai';
+import { IdentifiedObject } from '../../types/spatial.types';
+import { getApiKey, withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
+import { getPresetForOperation } from '../../config/modelConfigs';
 
-import { GoogleGenAI } from "@google/genai";
-import { IdentifiedObject } from "../../types/spatial.types";
-import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, generateCacheKey } from "../../utils/apiUtils";
+interface DetectedObjectRaw {
+  name?: string;
+  box_2d?: [number, number, number, number];
+  category?: string;
+  confidence?: number;
+}
+
+interface ParsedDetectionResult {
+  objects?: DetectedObjectRaw[];
+  items?: DetectedObjectRaw[];
+}
 
 const cleanJson = (text: string): string => {
   let clean = text.trim();
-  clean = clean.replace(/^```(json)?/i, '').replace(/```$/, '');
+  
+  // Remove markdown code blocks
+  clean = clean.replace(/^```(json)?\s*/i, '').replace(/\s*```$/i, '');
+  
+  // Remove any leading/trailing non-JSON characters
+  const firstBracket = clean.indexOf('[');
+  const firstBrace = clean.indexOf('{');
+  const start = Math.min(
+    firstBracket >= 0 ? firstBracket : Infinity,
+    firstBrace >= 0 ? firstBrace : Infinity
+  );
+  if (start !== Infinity) {
+    clean = clean.slice(start);
+  }
+  
+  // Find the last closing bracket/brace
+  const lastBracket = clean.lastIndexOf(']');
+  const lastBrace = clean.lastIndexOf('}');
+  const end = Math.max(lastBracket, lastBrace);
+  if (end > 0) {
+    clean = clean.slice(0, end + 1);
+  }
+  
+  // Fix common JSON issues
+  // Remove trailing commas before ] or }
+  clean = clean.replace(/,\s*([}\]])/g, '$1');
+  
+  // Fix unquoted property names (simple cases)
+  clean = clean.replace(/(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+  
   return clean.trim();
 };
 
-/**
- * Scans the entire image once to detect all objects with bounding boxes.
- * Used for client-side hit testing to avoid API calls on every click.
- */
-export const scanImageForObjects = async (base64Image: string, skipCache: boolean = false): Promise<IdentifiedObject[]> => {
-  // Fix: Use length and tail to ensure uniqueness.
+export const scanImageForObjects = async (
+  base64Image: string,
+  skipCache: boolean = false
+): Promise<IdentifiedObject[]> => {
   const uniqueId = `${base64Image.length}_${base64Image.slice(-30)}`;
-  // Skip cache for post-edit scans to ensure fresh detection
-  const cacheKey = skipCache ? null : generateCacheKey('fullScan_v6_rooms_objects', uniqueId);
+  const cacheKey = skipCache ? null : generateCacheKey('fullScan_v7_improved', uniqueId);
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
-    const model = "gemini-2.5-flash"; 
+    const model = 'gemini-2.5-flash';
 
-    const prompt = `
-    Analyze this image and detect ALL distinct objects, surfaces, AND ROOMS.
-    
-    CRITICAL INSTRUCTIONS:
-    1. IF FLOOR PLAN DETECTED:
-       - You MUST identify each specific ROOM as a distinct object (e.g., "Master Bedroom", "Living Area", "Kitchen", "Bathroom").
-       - Draw the bounding box around the ENTIRE room area (walls to walls).
-       - Category for rooms should be "Structure".
+    const prompt = `Detect all objects and spaces in this image. Return a JSON array.
 
-    2. GRANULAR OBJECTS: Identify discrete items (e.g. "Lamp", "Vase", "Chair", "Faucet") with tight bounding boxes.
-    
-    3. SURFACES & BACKGROUNDS (PRIORITY): 
-       - You MUST detect "Kitchen Backsplash", "Floor" (Tile/Wood), "Countertop", "Cabinetry", and "Walls".
-       - For these surfaces, draw the bounding box to cover the ENTIRE VISIBLE EXTENT of that surface, even if parts are blocked by furniture.
-       - DO NOT ignore corners or edges of floors/walls.
-    
-    Return a JSON list. 
-    For each object, provide:
-    1. "name": specific label (e.g. "Living Room", "Subway Tile Backsplash", "Oak Floor").
-    2. "box_2d": [ymin, xmin, ymax, xmax] (normalized 0-1000 coordinates).
-    3. "category": One of ["Furniture", "Appliance", "Structure", "Decor", "Surface"].
-    `;
+Categories to detect:
+
+1. ROOMS (for floor plans):
+   - Identify each labeled room as a separate object (Living Room, Kitchen, Bedroom, etc.)
+   - Bounding box should encompass the entire room area from wall to wall
+   - Category: "Structure"
+
+2. SURFACES (walls, floors, countertops):
+   - Detect large continuous surfaces: floors, walls, backsplashes, countertops, cabinetry
+   - Bounding box should cover the full visible extent, even if partially obscured by furniture
+   - Category: "Surface"
+   - Examples: "Oak Hardwood Floor", "Subway Tile Backsplash", "Granite Countertop"
+
+3. FURNITURE (chairs, tables, sofas):
+   - Individual furniture pieces with tight bounding boxes
+   - Category: "Furniture"
+
+4. APPLIANCES (refrigerators, ovens, dishwashers):
+   - Built-in and freestanding appliances
+   - Category: "Appliance"
+
+5. DECOR (lamps, vases, artwork):
+   - Decorative items and accessories
+   - Category: "Decor"
+
+Output format:
+[
+  {
+    "name": "Master Bedroom",
+    "box_2d": [100, 150, 600, 800],
+    "category": "Structure"
+  },
+  {
+    "name": "Marble Countertop",
+    "box_2d": [200, 300, 250, 900],
+    "category": "Surface"
+  }
+]
+
+Note: box_2d format is [ymin, xmin, ymax, xmax] with coordinates normalized 0-1000.`;
 
     const response = await ai.models.generateContent({
       model: model,
@@ -55,45 +112,86 @@ export const scanImageForObjects = async (base64Image: string, skipCache: boolea
           { text: prompt },
         ],
       },
-      config: { responseMimeType: "application/json" },
+      config: {
+        responseMimeType: 'application/json',
+        temperature: getPresetForOperation('OBJECT_DETECTION').temperature,
+      },
     });
 
     const text = response.text;
     if (!text) return [];
 
     try {
-      const parsed = JSON.parse(cleanJson(text));
-      // Ensure it's an array
-      const list = Array.isArray(parsed) ? parsed : (parsed.objects || []);
+      const cleanedText = cleanJson(text);
+      let parsed: DetectedObjectRaw[] | ParsedDetectionResult;
       
-      return list.map((item: any, index: number) => ({
-        id: `scan_${index}_${Date.now()}`,
-        name: item.name || "Unknown Object",
-        position: item.box_2d ? `[${Math.round((item.box_2d[1] + item.box_2d[3])/2)}, ${Math.round((item.box_2d[0] + item.box_2d[2])/2)}]` : "Detected",
-        box_2d: item.box_2d,
-        category: item.category || 'Furniture',
-        visual_details: item.name, 
-        confidence: 0.9
-      }));
+      try {
+        parsed = JSON.parse(cleanedText);
+      } catch (parseError) {
+        // Try to extract individual objects using regex as fallback
+        console.warn('Initial JSON parse failed, attempting recovery...', parseError);
+        const objectMatches = cleanedText.match(/\{[^{}]*"name"[^{}]*\}/g);
+        if (objectMatches && objectMatches.length > 0) {
+          const recoveredObjects: DetectedObjectRaw[] = [];
+          for (const match of objectMatches) {
+            try {
+              const obj = JSON.parse(match);
+              if (obj.name) {
+                recoveredObjects.push(obj);
+              }
+            } catch {
+              // Skip malformed individual objects
+            }
+          }
+          if (recoveredObjects.length > 0) {
+            console.log(`Recovered ${recoveredObjects.length} objects from malformed JSON`);
+            parsed = recoveredObjects;
+          } else {
+            throw parseError;
+          }
+        } else {
+          throw parseError;
+        }
+      }
+      
+      const list: DetectedObjectRaw[] = Array.isArray(parsed)
+        ? parsed
+        : (parsed as ParsedDetectionResult).objects || (parsed as ParsedDetectionResult).items || [];
+
+      return list.map((item, index) => {
+        const centerX = item.box_2d ? Math.round((item.box_2d[1] + item.box_2d[3]) / 2) : 500;
+        const centerY = item.box_2d ? Math.round((item.box_2d[0] + item.box_2d[2]) / 2) : 500;
+
+        return {
+          id: `scan_${index}_${Date.now()}`,
+          name: item.name || 'Unknown Object',
+          position: `[${centerX}, ${centerY}]`,
+          box_2d: item.box_2d || [0, 0, 1000, 1000],
+          category: (item.category as IdentifiedObject['category']) || 'Furniture',
+          visual_details: item.name,
+          confidence: item.confidence || 0.9,
+        };
+      });
     } catch (e) {
-      console.warn("Failed to parse scan result", e);
+      console.warn('Failed to parse object detection result:', e);
+      console.warn('Raw response:', text.slice(0, 500));
       return [];
     }
   }, cacheKey || undefined);
 };
 
-// Kept for backward compatibility or specific fallbacks if needed.
 export const identifyObject = async (
-  base64Image: string, 
-  x: number, 
+  _base64Image: string,
+  x: number,
   y: number,
-  is2dPlan: boolean = false 
+  _is2dPlan: boolean = false
 ): Promise<IdentifiedObject> => {
-   return {
-     id: `legacy_${Date.now()}`,
-     name: "Selected Object",
-     position: `[${x},${y}]`,
-     visual_details: "Object at clicked location",
-     category: "Furniture"
-   };
+  return {
+    id: `legacy_${Date.now()}`,
+    name: 'Selected Object',
+    position: `[${x}, ${y}]`,
+    visual_details: 'Object at clicked location',
+    category: 'Furniture',
+    confidence: 0.5,
+  };
 };

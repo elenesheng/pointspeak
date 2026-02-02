@@ -1,21 +1,40 @@
+import { GoogleGenAI, GenerateContentResponse, Part } from '@google/genai';
+import { GEMINI_CONFIG } from '../../config/gemini.config';
+import { getApiKey } from '../../utils/apiUtils';
+import { convertToPNG, normalizeBase64 } from '../../utils/imageProcessing';
+import { IdentifiedObject } from '../../types/spatial.types';
+import { getPresetForOperation, IMAGE_SIZE_2K } from '../../config/modelConfigs';
+import { buildRenderingSystemPrompt, getRenderingInstruction } from '../../config/prompts/rendering/structure';
+import { getStage1StructurePrompt, buildStage2StylePrompt, buildStyleProjection } from '../../config/prompts/rendering/multi-stage';
 
-import { GoogleGenAI } from "@google/genai";
-import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey } from "../../utils/apiUtils";
-import { convertToPNG, normalizeBase64 } from "../../utils/imageProcessing";
-import { IdentifiedObject } from "../../types/spatial.types";
+interface ContentPart {
+  inlineData?: { mimeType: string; data: string };
+  text?: string;
+}
 
-// Helper for extracting base64
-const extractBase64 = (response: any): string => {
-   for (const part of response.candidates?.[0]?.content?.parts || []) {
-      if (part.inlineData?.data) return `data:image/jpeg;base64,${part.inlineData.data}`;
+
+const extractBase64 = (response: GenerateContentResponse): string => {
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  
+  // Check inline data first (preferred)
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      const mimeType = part.inlineData.mimeType || 'image/jpeg';
+      return `data:${mimeType};base64,${part.inlineData.data}`;
     }
-    const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (textPart) {
-      const base64Match = textPart.match(/data:image\/[a-zA-Z]*;base64,([^\"]*)/);
-      if (base64Match && base64Match[1]) return `data:image/jpeg;base64,${base64Match[1]}`;
+  }
+  
+  // Fallback: check text response for base64
+  const textPart = parts[0]?.text;
+  if (textPart) {
+    const base64Match = textPart.match(/data:image\/([a-zA-Z]*);base64,([^"]*)/);
+    if (base64Match?.[1] && base64Match?.[2]) {
+      const mimeType = base64Match[1] || 'jpeg';
+      return `data:image/${mimeType};base64,${base64Match[2]}`;
     }
-    throw new Error("No image generated.");
+  }
+  
+  throw new Error('No image generated.');
 };
 
 export const generateMultiAngleRender = async (
@@ -23,134 +42,159 @@ export const generateMultiAngleRender = async (
   maskBase64: string,
   referenceBase64: string | null,
   styleDescription: string,
-  detectedObjects?: IdentifiedObject[]
+  detectedObjects?: IdentifiedObject[],
+  isAlreadyVisualized: boolean = false
 ): Promise<string[]> => {
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
-  
-  console.log("[Render] Starting Constrained Visualization...");
 
-  const objectListString = detectedObjects && detectedObjects.length > 0
-    ? detectedObjects.map(o => `- ${o.name} (${o.category})`).join('\n')
-    : "No specific objects detected. Detect from plan.";
+  const objectContext =
+    detectedObjects && detectedObjects.length > 0
+      ? `\n\nDetected objects:\n${detectedObjects.map((o) => `- ${o.name} (${o.category})`).join('\n')}`
+      : '';
 
-  const systemPrompt = `
-SYSTEM ROLE:
-You are a constrained architectural visualizer.
-
-You are operating inside a system that has already:
-- Uploaded a FLOOR PLAN
-- Detected rooms with exact boundaries
-- Detected objects and surfaces
-- Applied a 2D design style
-
-CRITICAL AUTHORITY RULE:
-You must treat detected structure as FINAL.
-You are not allowed to reinterpret layout, walls, or proportions.
-
----
-
-INPUTS YOU RECEIVE:
-
-1. FULL FLOOR PLAN IMAGE (Context)
-2. STRUCTURAL MASK (Authority)
-   - WHITE = walls (IMMUTABLE)
-   - BLACK = interior space
-3. DETECTED OBJECT LIST (Ground Truth)
-4. USER STYLE PROMPT
-
----
-
-STRICT RULES (NON-NEGOTIABLE):
-
-STRUCTURE:
-- Do NOT move walls
-- Do NOT resize rooms
-- Do NOT invent doors or windows
-- Do NOT remove walls
-
-SCOPE:
-- The input image is a crop of the specific room to visualize.
-- Focus ENTIRELY on this space.
-
-OBJECTS:
-- Use ONLY detected objects:
-${objectListString}
-- Do NOT invent furniture
-- Preserve relative placement
-- If space is tight, allow partial cropping instead of shrinking
-
-CAMERA (CRITICAL):
-- **HUMAN EYE-LEVEL PERSPECTIVE ONLY** (Approx 1.6m height).
-- **FORBIDDEN:** Isometric, Orthographic, Top-Down, Cutaway, Dollhouse views.
-- Position the camera inside the room, near the entrance/doorway, looking inward.
-- Vertical lines must be straight (2-point perspective).
-- Floor and ceiling must be visible.
-
-STYLE & MATERIAL RULES (CRITICAL):
-- Apply style as MATERIALS and LIGHTING only.
-- Style must NOT affect geometry.
-- **WOOD:** Natural matte or satin finish. **DO NOT** use excessive noise or high-frequency grain. It must look like planed lumber or veneer, not raw noise.
-- **GLASS:** Transparent or Reflective. **NEVER** apply wood grain, noise, or opaque textures to glass surfaces (e.g., cabinet doors, windows, showers).
-- **METAL:** Smooth, metallic reflection. No grain.
-- **SEMANTICS:** Apply textures logically. Sinks are ceramic/metal, not wood. Windows are glass, not wood.
-
-User Prompt: "${styleDescription}"
-
-FAILURE MODE:
-If instructions conflict:
-1. Structural mask wins
-2. Room bounding box wins
-3. Detected objects win
-4. User style loses
-
-OUTPUT:
-A photorealistic 3D interior image that is a faithful projection of the selected room, not a redesign.
-`;
+  const systemPrompt = buildRenderingSystemPrompt({
+    styleDescription,
+    isAlreadyVisualized,
+    referenceBase64,
+    objectContext,
+  });
 
   try {
-      const parts: any[] = [
-        { inlineData: { mimeType: 'image/jpeg', data: planBase64 } },
-        { inlineData: { mimeType: 'image/png', data: maskBase64 } },
-        { text: "Generate the photorealistic render following the system rules." }
-      ];
-      
-      // If there is a style reference image, add it
-      if (referenceBase64) {
-          parts.splice(1, 0, { inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
-      }
+    // Image order: Blueprint first, Aesthetic second (if exists), Mask last (THE TRUTH), Instructions after
+    const parts: ContentPart[] = [
+      { inlineData: { mimeType: 'image/jpeg', data: planBase64 } }, // The Blueprint
+    ];
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
-        contents: { parts },
-        config: { 
-            systemInstruction: systemPrompt,
-            temperature: 0.2, // Low temperature for strict adherence
-            // Ensure initial render is also high quality
-            imageConfig: { imageSize: '2K' }
-        }
-      });
-      
-      const jpegImageBase64 = extractBase64(response);
-      // Convert API response (JPEG) to PNG for lossless internal storage
-      const jpegBase64 = normalizeBase64(jpegImageBase64);
-      const pngBase64 = await convertToPNG(jpegBase64);
-      return [`data:image/png;base64,${pngBase64}`];
+    // Add reference image if provided (second position - The Aesthetic)
+    if (referenceBase64) {
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
+    }
 
+    // Add structural mask LAST before instructions (THE TRUTH - most recent visual context)
+    parts.push({ inlineData: { mimeType: 'image/png', data: maskBase64 } });
+
+    // Instructions last (most important for Gemini - reads mask right before this)
+    const instructionText = getRenderingInstruction(isAlreadyVisualized, referenceBase64);
+
+    parts.push({ text: instructionText });
+
+    const response = await ai.models.generateContent({
+      model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
+      contents: { parts },
+      config: {
+        systemInstruction: systemPrompt,
+        temperature: getPresetForOperation('RENDER_SINGLE').temperature,
+        imageConfig: { imageSize: IMAGE_SIZE_2K },
+      },
+    });
+
+    const jpegImageBase64 = extractBase64(response);
+    const jpegBase64 = normalizeBase64(jpegImageBase64);
+    const pngBase64 = await convertToPNG(jpegBase64);
+    return [`data:image/png;base64,${pngBase64}`];
   } catch (e) {
-      console.error("Render failed", e);
-      throw e;
+    console.error('Render failed', e);
+    throw e;
   }
 };
 
-// Single angle render (internal or fallback use)
 export const generateRealisticRender = async (
   planBase64: string,
   maskBase64: string,
   referenceBase64: string | null,
   styleDescription: string,
-  detectedObjects?: IdentifiedObject[]
+  detectedObjects?: IdentifiedObject[],
+  isAlreadyVisualized: boolean = false
 ): Promise<string> => {
-  const result = await generateMultiAngleRender(planBase64, maskBase64, referenceBase64, styleDescription, detectedObjects);
+  const result = await generateMultiAngleRender(
+    planBase64,
+    maskBase64,
+    referenceBase64,
+    styleDescription,
+    detectedObjects,
+    isAlreadyVisualized
+  );
   return result[0];
 };
+
+/**
+ * Two-stage rendering for better perspective control
+ * Stage 1: Generate rough 3D structure with strong perspective
+ * Stage 2: Refine details and apply style
+ */
+export const generateMultiStageRender = async (
+  planBase64: string,
+  maskBase64: string,
+  referenceBase64: string | null,
+  styleDescription: string,
+  detectedObjects?: IdentifiedObject[],
+  isAlreadyVisualized: boolean = false
+): Promise<string[]> => {
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
+
+  const objectContext =
+    detectedObjects && detectedObjects.length > 0
+      ? `\n\nDetected objects:\n${detectedObjects.map((o) => `- ${o.name} (${o.category})`).join('\n')}`
+      : '';
+
+  // STAGE 1: Architectural White Model (Wireframe/Clay Hybrid)
+  const structurePrompt = getStage1StructurePrompt();
+
+  // Image order: Blueprint first, Mask last (THE TRUTH), Instructions after
+  const stage1Parts: ContentPart[] = [
+    { inlineData: { mimeType: 'image/jpeg', data: planBase64 } }, // The Blueprint
+    { inlineData: { mimeType: 'image/png', data: maskBase64 } }, // THE TRUTH (Last image before instructions)
+    { text: structurePrompt }, // The Rules
+  ];
+
+  console.log('[Render] Stage 1: Generating perspective structure...');
+  
+  const stage1Response = await ai.models.generateContent({
+    model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
+    contents: { parts: stage1Parts },
+      config: {
+        temperature: getPresetForOperation('RENDER_STRUCTURE').temperature,
+        imageConfig: { imageSize: IMAGE_SIZE_2K },
+      },
+  });
+
+  const stage1Image = extractBase64(stage1Response);
+  const stage1Base64 = normalizeBase64(stage1Image);
+
+  // STAGE 2: Apply Style
+  console.log('[Render] Stage 2: Applying style and details...');
+  
+  const stylePrompt = buildStage2StylePrompt({
+    styleDescription,
+    objectContext,
+    referenceBase64,
+  });
+
+  // Image order: Stage 1 result first, reference second (if exists), instructions last
+  const stage2Parts: ContentPart[] = [
+    { inlineData: { mimeType: 'image/jpeg', data: stage1Base64 } },
+  ];
+
+  if (referenceBase64) {
+    stage2Parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
+  }
+
+  stage2Parts.push({ text: stylePrompt });
+
+  const stage2Response = await ai.models.generateContent({
+    model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
+    contents: { parts: stage2Parts },
+    config: {
+      temperature: getPresetForOperation('RENDER_STYLE').temperature,
+      imageConfig: { imageSize: IMAGE_SIZE_2K },
+    },
+  });
+
+  const finalImage = extractBase64(stage2Response);
+  const finalBase64 = normalizeBase64(finalImage);
+  const pngBase64 = await convertToPNG(finalBase64);
+  return [`data:image/png;base64,${pngBase64}`];
+};
+

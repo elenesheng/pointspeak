@@ -1,6 +1,7 @@
-
 import React, { useRef, useEffect } from 'react';
 import { ReasoningLog, AppStatus, EditHistoryEntry } from '../../types/ui.types';
+import { IntentTranslation } from '../../types/ai.types';
+import { IdentifiedObject } from '../../types/spatial.types';
 import { LogEntry } from './LogEntry';
 import { Zap, Target, Sparkles, ChevronDown, Download, XCircle } from 'lucide-react';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
@@ -9,11 +10,10 @@ interface ReasoningPanelProps {
   logs: ReasoningLog[];
   status: AppStatus;
   isProcessing: boolean;
-  onForceExecute: (action: any, object: any) => void;
+  onForceExecute: (action: IntentTranslation, object: IdentifiedObject) => void;
   onAlternativeClick: (suggestion: string) => void;
   activeModel: string;
   onModelChange: (model: string) => void;
-  // History Props
   editHistory: EditHistoryEntry[];
   currentEditIndex: number;
   onJumpToHistory: (index: number) => void;
@@ -45,7 +45,8 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
              <h2 className="font-semibold text-sm text-slate-300">Gemini Spatial Agent</h2>
           </div>
           
-          {/* Model Toggle */}
+          {/* Model Toggle - Hidden for now, functionality preserved */}
+          {/* 
           <div className="relative group">
             <button className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${isPro ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
               {isPro ? 'Pro Model' : 'Fast Model'}
@@ -68,6 +69,7 @@ export const ReasoningPanel: React.FC<ReasoningPanelProps> = ({
                </button>
             </div>
           </div>
+          */}
         </div>
         
         {/* Status Bar */}

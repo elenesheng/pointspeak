@@ -146,35 +146,108 @@ export const InputArea: React.FC<InputAreaProps> = ({
          )}
       </div>
 
-      {/* Preset Chips (Smart Suggestions) */}
+      {/* Smart Quick Actions - Always show Remove, other actions are category-specific */}
       {selectedObject && !isInteractionDisabled && (
         <div className="mb-3 flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-           {category === 'Appliance' && (
-             <>
-               <button onClick={() => setUserInput(`Change ${selectedObject.name} to Stainless Steel`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-                  <Palette className="w-3.5 h-3.5" /> Stainless Steel
-               </button>
-               <button onClick={() => setUserInput(`Change ${selectedObject.name} to Matte Black`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-                  <Palette className="w-3.5 h-3.5" /> Matte Black
-               </button>
-             </>
-           )}
-           {category === 'Furniture' && (
-             <>
-               <button onClick={() => setUserInput(`Upholster ${selectedObject.name} in Cognac Leather`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-                  <Sofa className="w-3.5 h-3.5" /> Leather
-               </button>
-               <button onClick={() => setUserInput(`Upholster ${selectedObject.name} in Cream Velvet`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-                  <Sparkles className="w-3.5 h-3.5" /> Velvet
-               </button>
-             </>
-           )}
-           <button onClick={() => setUserInput(`Remove ${selectedObject.name}`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-              <Trash2 className="w-3.5 h-3.5" /> Remove
-           </button>
-           <button onClick={() => setUserInput(`Fix alignment of ${selectedObject.name}`)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors">
-              <Hammer className="w-3.5 h-3.5" /> Fix Align
-           </button>
+          {/* Remove - Always available */}
+          <button
+            onClick={() => setUserInput(`Remove ${selectedObject.name}`)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-xs text-rose-300 whitespace-nowrap transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" /> Remove
+          </button>
+
+          {/* Appliance-specific actions */}
+          {category === 'Appliance' && (
+            <>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to Stainless Steel`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Stainless Steel
+              </button>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to Matte Black`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Matte Black
+              </button>
+            </>
+          )}
+
+          {/* Furniture-specific actions */}
+          {category === 'Furniture' && (
+            <>
+              <button
+                onClick={() => setUserInput(`Upholster ${selectedObject.name} in Cognac Leather`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Sofa className="w-3.5 h-3.5" /> Leather
+              </button>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} style to modern`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Sparkles className="w-3.5 h-3.5" /> Modern Style
+              </button>
+            </>
+          )}
+
+          {/* Surface-specific actions (floors, countertops, walls) */}
+          {category === 'Surface' && (
+            <>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to white marble`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Marble
+              </button>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to dark oak wood`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Dark Oak
+              </button>
+            </>
+          )}
+
+          {/* Decor-specific actions */}
+          {category === 'Decor' && (
+            <button
+              onClick={() => setUserInput(`Replace ${selectedObject.name} with a modern alternative`)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Modernize
+            </button>
+          )}
+
+          {/* Fixture-specific actions (sinks, faucets, lights) */}
+          {category === 'Fixture' && (
+            <>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to brushed gold`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Gold
+              </button>
+              <button
+                onClick={() => setUserInput(`Change ${selectedObject.name} to matte black`)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+              >
+                <Palette className="w-3.5 h-3.5" /> Black
+              </button>
+            </>
+          )}
+
+          {/* Structure-specific actions (walls, rooms) */}
+          {category === 'Structure' && (
+            <button
+              onClick={() => setUserInput(`Paint ${selectedObject.name} in warm white`)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+            >
+              <Palette className="w-3.5 h-3.5" /> Repaint
+            </button>
+          )}
         </div>
       )}
 

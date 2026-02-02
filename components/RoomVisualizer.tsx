@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { DetailedRoomAnalysis } from '../types';
+import { DetailedRoomAnalysis } from '../types/spatial.types';
 
 interface RoomVisualizerProps {
   analysis: DetailedRoomAnalysis;

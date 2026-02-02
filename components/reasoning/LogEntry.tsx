@@ -1,14 +1,27 @@
-
 import React from 'react';
 import { ReasoningLog } from '../../types/ui.types';
-import { 
-  CheckCircle2, AlertCircle, Map, Target, Cpu, ShieldCheck, ShieldAlert,
-  Eraser, Move, Palette, Sparkles, Activity, CornerDownRight, Zap, Lightbulb
+import { IntentTranslation } from '../../types/ai.types';
+import { IdentifiedObject, RoomConstraint } from '../../types/spatial.types';
+import {
+  CheckCircle2,
+  AlertCircle,
+  Map,
+  Target,
+  Cpu,
+  ShieldCheck,
+  Eraser,
+  Move,
+  Palette,
+  Sparkles,
+  Activity,
+  CornerDownRight,
+  Zap,
+  Lightbulb,
 } from 'lucide-react';
 
 interface LogEntryProps {
   log: ReasoningLog;
-  onForceExecute?: (action: any, object: any) => void;
+  onForceExecute?: (action: IntentTranslation, object: IdentifiedObject) => void;
   onAlternativeClick?: (suggestion: string) => void;
 }
 
@@ -58,7 +71,7 @@ export const LogEntry: React.FC<LogEntryProps> = ({ log, onForceExecute, onAlter
                <div>
                  <p className="text-xs font-bold text-indigo-400/80 uppercase tracking-wide mb-2">Architectural Constraints</p>
                  <div className="space-y-2">
-                   {log.metadata.constraints.map((c: any, i: number) => (
+                   {log.metadata.constraints?.map((c: RoomConstraint, i: number) => (
                      <div key={i} className="bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/50">
                        <div className="flex justify-between items-start mb-1">
                          <span className="text-xs font-bold text-slate-400 uppercase">{c.type}</span>

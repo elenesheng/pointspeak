@@ -4,6 +4,7 @@ import { IntentTranslation } from "../../types/ai.types";
 import { IdentifiedObject, DetailedRoomAnalysis, Coordinate } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
 import { getApiKey, withSmartRetry, runWithFallback } from "../../utils/apiUtils";
+import { getPresetForOperation } from "../../config/modelConfigs";
 
 export const translateIntentWithSpatialAwareness = async (
   base64Image: string,
@@ -36,11 +37,13 @@ export const translateIntentWithSpatialAwareness = async (
       STANDARD RULES:
       - MOVE: Moves the source object to the target location. This is the primary action if two points are set.
       - REMOVE: Explicitly deletes the object.
-      - EDIT: Modifies style, color, or material.
+      - INTERNAL_MODIFY: Modify internal/sub-component geometry of the selected object (add/integrate/insert/open/cut/carve/build in shelves, niches, cut-outs, glass inserts, slatted panels, display bays, etc.). Object's outer footprint and position must remain unchanged. Use when user wants to change what's INSIDE the object, not the object itself.
+      - STYLE: Style-only changes (modern, minimalist, rustic, luxury, industrial, contemporary, etc.). Use when user wants aesthetic changes without structural modifications. NO verbs like remove, move, replace, resize.
+      - EDIT: Other modifications to style, color, or material that don't fit STYLE or INTERNAL_MODIFY categories.
 
       OUTPUT JSON:
       {
-        "operation_type": "REMOVE" | "MOVE" | "EDIT",
+        "operation_type": "REMOVE" | "MOVE" | "EDIT" | "STYLE" | "INTERNAL_MODIFY",
         "interpreted_intent": "Brief description",
         "proposed_action": "Precise instruction for the image generator",
         "active_subject_name": "Subject Name",
@@ -59,6 +62,7 @@ export const translateIntentWithSpatialAwareness = async (
       },
       config: {
         responseMimeType: "application/json",
+        temperature: getPresetForOperation('INTENT_PARSING').temperature,
       },
     });
 

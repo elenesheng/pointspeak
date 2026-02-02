@@ -2,6 +2,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
 import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
+import { getPresetForOperation } from "../../config/modelConfigs";
 
 /**
  * Analyzes a reference image to extract material, texture, and pattern information.
@@ -42,7 +43,7 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
         },
         config: {
            responseMimeType: "text/plain",
-           temperature: 0.2, // Low temp for accuracy
+           temperature: getPresetForOperation('REFERENCE_ANALYSIS').temperature,
         }
       });
 

@@ -1,7 +1,17 @@
-
 export interface Coordinate {
   x: number;
   y: number;
+}
+
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+
+  interface Window {
+    aistudio?: AIStudio;
+  }
 }
 
 export interface RoomConstraint {

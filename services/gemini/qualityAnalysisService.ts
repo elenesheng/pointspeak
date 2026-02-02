@@ -1,0 +1,225 @@
+import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { GEMINI_CONFIG } from '../../config/gemini.config';
+import { getApiKey, withSmartRetry, runWithFallback } from '../../utils/apiUtils';
+import { getGeminiCacheName, getInlineContext, getLearnedPatternsForOperation } from './contextCacheService';
+import { getPresetForOperation } from '../../config/modelConfigs';
+import { buildQualityAnalysisSystemPrompt, getQualityAnalysisInstruction } from '../../config/prompts/quality/analysis';
+
+export interface QualityIssue {
+  severity: 'critical' | 'warning' | 'suggestion';
+  category: 'lighting' | 'alignment' | 'color' | 'style' | 'proportion' | 'texture' | 'composition';
+  title: string;
+  description: string;
+  location?: string;
+  fix_prompt: string;
+  auto_fixable: boolean;
+}
+
+export interface QualityAnalysis {
+  overall_score: number;
+  style_detected: string;
+  issues: QualityIssue[];
+  strengths: string[];
+}
+
+const qualityIssueSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    severity: { type: Type.STRING, description: 'critical | warning | suggestion' },
+    category: {
+      type: Type.STRING,
+      description: 'lighting | alignment | color | style | proportion | texture | composition',
+    },
+    title: { type: Type.STRING },
+    description: { type: Type.STRING },
+    location: { type: Type.STRING },
+    fix_prompt: { type: Type.STRING, description: 'Exact prompt to fix this issue' },
+    auto_fixable: { type: Type.BOOLEAN },
+  },
+  required: ['severity', 'category', 'title', 'description', 'fix_prompt', 'auto_fixable'],
+};
+
+const qualityAnalysisSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    overall_score: { type: Type.NUMBER, description: 'Score 0-100' },
+    style_detected: { type: Type.STRING },
+    issues: { type: Type.ARRAY, items: qualityIssueSchema },
+    strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+  },
+  required: ['overall_score', 'style_detected', 'issues', 'strengths'],
+};
+
+// Learning context interface
+interface LearningContext {
+  stylePreferences: string[];
+  avoidedActions: string[];
+  contextualInsights: string;
+  warningsForAI: string[];
+}
+
+export const analyzeImageQuality = async (
+  imageBase64: string,
+  is2DPlan: boolean = false,
+  learningContext?: LearningContext
+): Promise<QualityAnalysis> => {
+  const cacheKey = `quality_${imageBase64.length}_${imageBase64.slice(-20)}`;
+
+  return withSmartRetry(async () => {
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+    // Build learning context for analysis (includes prompt patterns from cache)
+    let learningSection = '';
+    if (learningContext) {
+      if (learningContext.stylePreferences.length > 0) {
+        learningSection += `\nUser's preferred styles: ${learningContext.stylePreferences.slice(0, 5).join(', ')}`;
+      }
+      if (learningContext.avoidedActions.length > 0) {
+        learningSection += `\nAvoid suggesting: ${learningContext.avoidedActions.slice(0, 3).join(', ')}`;
+      }
+      if (learningContext.warningsForAI.length > 0) {
+        learningSection += `\nLearned warnings: ${learningContext.warningsForAI.slice(0, 2).join('; ')}`;
+      }
+    }
+    
+    // Add learned prompt patterns from cache (what worked/failed)
+    // This helps analysis suggest better prompts based on past failures
+    const learnedPatterns = getInlineContext();
+    if (learnedPatterns) {
+      learningSection += `\n\nLEARNED PROMPT PATTERNS (use successful patterns, avoid failed ones):\n${learnedPatterns}`;
+    }
+    
+    // Add operation-specific pattern guidance
+    const operationTypes = ['MOVE', 'REMOVE', 'STYLE', 'EDIT', 'INTERNAL_MODIFY'];
+    let operationPatterns = '';
+    operationTypes.forEach(opType => {
+      const patterns = getLearnedPatternsForOperation(opType);
+      if (patterns.successfulPatterns.length > 0 || patterns.failedPatterns.length > 0) {
+        operationPatterns += `\n\n${opType} OPERATION PATTERNS:\n`;
+        if (patterns.successfulPatterns.length > 0) {
+          operationPatterns += `✓ SUCCESSFUL PATTERNS (use these):\n${patterns.successfulPatterns.slice(0, 2).map(p => `  - ${p}`).join('\n')}\n`;
+        }
+        if (patterns.failedPatterns.length > 0) {
+          operationPatterns += `✗ FAILED PATTERNS (avoid these):\n${patterns.failedPatterns.slice(0, 2).map(p => `  - ${p}`).join('\n')}\n`;
+        }
+      }
+    });
+    
+    if (operationPatterns) {
+      learningSection += `\n\nOPERATION-SPECIFIC PROMPT GUIDANCE:${operationPatterns}\n\nWhen generating fix_prompts, ALWAYS use successful patterns and AVOID failed patterns for that operation type.`;
+    }
+
+    const runAnalysis = async (model: string) => {
+      // Try to get cache (will return null for image models or if too small)
+      const cacheName = await getGeminiCacheName(model, true);
+      
+      // Build system instruction with learning context
+      const inlineContext = !cacheName ? getInlineContext() : undefined;
+      if (inlineContext) {
+        console.log(`[Quality Analysis] Using inline context (${inlineContext.length} chars)`);
+      }
+      
+      const systemInstructionText = buildQualityAnalysisSystemPrompt({
+        learningSection,
+        is2DPlan,
+        inlineContext: inlineContext || undefined,
+      });
+      
+      const config: any = {
+        systemInstruction: systemInstructionText,
+        responseMimeType: 'application/json',
+        responseSchema: qualityAnalysisSchema,
+        temperature: getPresetForOperation('QUALITY_ANALYSIS').temperature,
+      };
+      
+      if (cacheName) {
+        config.cachedContent = cacheName;
+        console.log(`[Quality Analysis] ✓ Using cached context: ${cacheName}`);
+      }
+      
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: {
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
+            {
+              text: getQualityAnalysisInstruction(is2DPlan),
+            },
+          ],
+        },
+        config,
+      });
+
+      const text = response.text;
+      if (!text) throw new Error('Empty response from quality analysis');
+
+      return JSON.parse(text) as QualityAnalysis;
+    };
+
+    return runWithFallback(
+      () => runAnalysis(GEMINI_CONFIG.MODELS.REASONING),
+      () => runAnalysis(GEMINI_CONFIG.MODELS.REASONING_FALLBACK),
+      'Quality Analysis'
+    );
+  }, cacheKey);
+};
+
+export const analyzeAfterEdit = async (
+  imageBase64: string,
+  editDescription: string,
+  previousIssues: QualityIssue[]
+): Promise<QualityAnalysis> => {
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+  const previousIssuesContext =
+    previousIssues.length > 0
+      ? `Previous issues that were identified: ${previousIssues.map((i) => i.title).join(', ')}`
+      : '';
+
+  try {
+    const response = await ai.models.generateContent({
+      model: GEMINI_CONFIG.MODELS.REASONING,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
+          {
+            text: `
+The user just applied this edit: "${editDescription}"
+
+${previousIssuesContext}
+
+TASK: Post-Edit Quality Assurance
+1. Check if the edit was applied correctly
+2. Look for NEW issues introduced by the edit
+3. Check if previous issues were resolved
+4. Identify any artifacts, distortions, or quality degradation
+5. Suggest any follow-up improvements
+
+Be thorough but fair. Not every edit introduces problems.
+          `,
+          },
+        ],
+      },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: qualityAnalysisSchema,
+        temperature: getPresetForOperation('QUALITY_ANALYSIS_FALLBACK').temperature,
+      },
+    });
+
+    const text = response.text;
+    if (text) {
+      return JSON.parse(text) as QualityAnalysis;
+    }
+  } catch (e) {
+    console.error('Post-edit analysis failed:', e);
+  }
+
+  return {
+    overall_score: 75,
+    style_detected: 'Unknown',
+    issues: [],
+    strengths: ['Edit applied successfully'],
+  };
+};
+

@@ -1,5 +1,6 @@
+import { IdentifiedObject } from './spatial.types';
 
-export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT' | 'SWAP';
+export type OperationType = 'REMOVE' | 'MOVE' | 'EDIT' | 'SWAP' | 'STYLE' | 'INTERNAL_MODIFY';
 
 export interface IntentTranslation {
   operation_type: OperationType;
@@ -9,11 +10,8 @@ export interface IntentTranslation {
   new_position?: { description: string };
   removed_object_replacement?: string;
   imagen_prompt: string;
-  // New fields for precise visual anchoring
-  source_visual_context?: string; 
+  source_visual_context?: string;
   target_visual_context?: string;
-  
-  // CONSOLIDATED FIELDS (To save API calls)
   validation?: {
     valid: boolean;
     warnings: string[];
@@ -27,10 +25,9 @@ export interface SpatialValidation {
   valid: boolean;
   warnings: string[];
   alternative_suggestion?: string;
-  // Metadata for UI overrides
   canForce?: boolean;
   forceAction?: IntentTranslation;
-  forceObject?: any;
+  forceObject?: IdentifiedObject;
 }
 
 export interface DesignSuggestion {

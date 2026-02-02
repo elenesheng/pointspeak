@@ -19,10 +19,11 @@ export const GEMINI_CONFIG = {
   SETTINGS: {
     MAX_RETRIES: 2, 
     TIMEOUT_MS: 60000, 
-    CACHE_TTL_MS: 1000 * 60 * 10, 
+    CACHE_TTL_MS: 1000 * 60 * 30, // 30 minutes (was 10)
   },
   FLAGS: {
     ENABLE_CACHING: true,
     ENABLE_FALLBACK_GENERATION: true,
+    PREFER_IMAGEN: true, // Try Imagen first if configured, fallback to Gemini
   }
 };
