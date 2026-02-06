@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { DesignSuggestion } from '../../types/ai.types';
 import { FloorPlanStyle } from '../../services/gemini/suggestionService';
+import { IdentifiedObject } from '../../types/spatial.types';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { LearningSummary } from '../feedback/LearningSummary';
 import { useLearningStore } from '../../store/learningStore';
@@ -34,8 +35,9 @@ interface DesignAssistantProps {
   onLike?: (suggestion: DesignSuggestion) => void;
   is2DPlan?: boolean;
   styleCards?: FloorPlanStyle[];
-  onApplyStyle?: (style: FloorPlanStyle) => void;
+  onApplyStyle?: (style: FloorPlanStyle, selectedRoom?: IdentifiedObject) => void;
   hasAppliedStyle?: boolean;
+  availableRooms?: IdentifiedObject[];
 }
 
 export const DesignAssistant: React.FC<DesignAssistantProps> = ({
@@ -52,11 +54,13 @@ export const DesignAssistant: React.FC<DesignAssistantProps> = ({
   styleCards = [],
   onApplyStyle,
   hasAppliedStyle = false,
+  availableRooms = [],
 }) => {
   const panelRef = useRef<HTMLDivElement>(null);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
   const [dislikedIds, setDislikedIds] = useState<Set<string>>(new Set());
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
+  const [selectedRoomForStyle, setSelectedRoomForStyle] = useState<IdentifiedObject | null>(null);
   const [showLearning, setShowLearning] = useState(false);
   const { patterns } = useLearningStore();
 
@@ -228,15 +232,53 @@ export const DesignAssistant: React.FC<DesignAssistantProps> = ({
                       ))}
                     </div>
 
+                    {/* Room Selection for Multi-Room Plans */}
+                    {availableRooms.length > 1 && (
+                      <div className="mb-3">
+                        <label className="text-xs text-slate-400 mb-2 block">Select Room:</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedRoomForStyle(null);
+                            }}
+                            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-medium transition-all ${
+                              selectedRoomForStyle === null
+                                ? 'bg-violet-600 text-white'
+                                : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                            }`}
+                          >
+                            All Rooms
+                          </button>
+                          {availableRooms.map((room) => (
+                            <button
+                              key={room.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedRoomForStyle(room);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-medium transition-all ${
+                                selectedRoomForStyle?.id === room.id
+                                  ? 'bg-violet-600 text-white'
+                                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                              }`}
+                            >
+                              {room.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onApplyStyle?.(style);
+                        onApplyStyle?.(style, selectedRoomForStyle || undefined);
                       }}
                       className="w-full py-2.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-violet-900/30 active:scale-95"
                     >
                       <Wand2 className="w-3.5 h-3.5" />
-                      Apply {style.name} Style
+                      Apply {style.name} Style{selectedRoomForStyle ? ` to ${selectedRoomForStyle.name}` : ''}
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   </div>

@@ -108,7 +108,7 @@ export const QualityAnalysisPanel: React.FC<QualityAnalysisPanelProps> = ({
   const suggestionCount = analysis?.issues.filter((i) => i.severity === 'suggestion').length || 0;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 pointer-events-none z-50 flex flex-col items-center justify-end pb-6">
+    <div className="fixed inset-0 pointer-events-none z-50 flex items-center justify-center p-6">
       <div
         ref={panelRef}
         className="bg-slate-900/95 backdrop-blur-xl border border-slate-700 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden pointer-events-auto transition-all animate-in slide-in-from-bottom-10"

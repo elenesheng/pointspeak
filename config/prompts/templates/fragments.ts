@@ -2,41 +2,92 @@
  * Reusable prompt fragments
  */
 
-export const REFERENCE_GUIDANCE_GLOBAL = (referenceMaterialDescription?: string) => {
+export const REFERENCE_GUIDANCE_GLOBAL = (referenceMaterialDescription?: string, stylePlan?: any) => {
   const styleDetails = referenceMaterialDescription 
     ? `\n\nREFERENCE ANALYSIS DETAILS:\n${referenceMaterialDescription}\n\nUse these EXACT specifications from the reference analysis.`
     : '';
   
-  return `\n\nREFERENCE STYLE APPLICATION (CRITICAL - FOLLOW EXACTLY):
+  const planInstructions = stylePlan?.execution_instructions
+    ? `\n\nREASONING-BASED EXECUTION PLAN (BINDING CONTRACT):\n${stylePlan.execution_instructions}\n\nThis plan is a BINDING CONTRACT - execute it literally and precisely. Do NOT treat it as suggestions or options. Follow this plan exactly while maintaining layout and proportions.`
+    : '';
+  
+  const materialsList = stylePlan?.application_strategy?.materials_to_apply?.length
+    ? `\n\nMATERIALS TO APPLY (from reasoning analysis - EXECUTE EXACTLY):\n${stylePlan.application_strategy.materials_to_apply.map((m: any) => {
+        if (typeof m === 'string') {
+          // Legacy format - just string
+          return `- ${m}`;
+        } else {
+          // New format - object with surface mapping
+          return `- ${m.surface}: ${m.material} (${m.finish} finish, ${m.color})`;
+        }
+      }).join('\n')}\n\nThese are BINDING instructions - apply each material to its specified surface exactly.`
+    : '';
+  
+  const furnitureGuidance = stylePlan?.application_strategy?.furniture_to_add?.length || stylePlan?.application_strategy?.furniture_to_replace?.length
+    ? `\n\nFURNITURE STRATEGY (from reasoning analysis):\n${stylePlan.application_strategy.furniture_to_add?.length ? `ADD: ${stylePlan.application_strategy.furniture_to_add.join(', ')}\n` : ''}${stylePlan.application_strategy.furniture_to_replace?.length ? `REPLACE: ${stylePlan.application_strategy.furniture_to_replace.join(', ')}\n` : ''}${stylePlan.application_strategy.placement_guidelines?.length ? `\nPLACEMENT GUIDELINES:\n${stylePlan.application_strategy.placement_guidelines.map((g: string) => `- ${g}`).join('\n')}` : ''}`
+    : '';
+  
+  // Build concrete feature enumeration from style plan
+  const featureEnumeration = stylePlan?.application_strategy?.materials_to_apply?.length
+    ? `\n\nCOPY THESE VISIBLE FEATURES FROM THE REFERENCE IMAGE:\n${stylePlan.application_strategy.materials_to_apply.map((m: any) => {
+        if (typeof m === 'string') {
+          return `- ${m}`;
+        } else {
+          return `- ${m.surface}: Copy ${m.material} material with ${m.finish} finish in ${m.color}`;
+        }
+      }).join('\n')}`
+    : '';
 
-The FIRST image is your style reference. You MUST apply its EXACT style throughout this room:
-${styleDetails}
-- Match the EXACT materials, colors, textures, and finishes visible in the reference image
-- Match the EXACT furniture styles, shapes, and arrangements from the reference where they fit the current layout
-- Match the EXACT decorative elements, accessories, and styling details
-- Match the EXACT lighting style, atmosphere, and overall aesthetic
-- If the reference shows specific colors (e.g., Beige/Cream, Terracotta/Burnt Orange), use those EXACT colors
-- If the reference shows specific materials (e.g., Matte Laminate, Glossy Ceramic Tile), use those EXACT materials
+  const furnitureEnumeration = stylePlan?.application_strategy?.furniture_to_add?.length || stylePlan?.application_strategy?.furniture_to_replace?.length
+    ? `\n\nCOPY THESE FURNITURE ITEMS FROM THE REFERENCE IMAGE:\n${stylePlan.application_strategy.furniture_to_add?.map((f: string) => `- ADD: ${f}`).join('\n') || ''}${stylePlan.application_strategy.furniture_to_replace?.map((f: string) => `- REPLACE with: ${f}`).join('\n') || ''}`
+    : '';
 
-The SECOND image is the current room to edit. Transform it to match the reference style EXACTLY while preserving structure.
+  const colorList = stylePlan?.reference_analysis?.color_palette?.length
+    ? `\n\nUSE ONLY THESE COLORS FROM IMAGE 1:\n${stylePlan.reference_analysis.color_palette.map((c: string) => `- ${c}`).join('\n')}`
+    : '';
 
-Preserve the existing room structure: wall positions, door locations, window positions, and plumbing fixtures stay exactly as they are.`;
+  return `\n\nCOPY VISIBLE FEATURES FROM IMAGE 1 TO IMAGE 2.
+
+CONSTRAINTS:
+- Same room, same camera, same layout
+- Don't block paths or plumbing
+
+${colorList}${featureEnumeration}${furnitureEnumeration}${materialsList}${furnitureGuidance}${planInstructions}
+
+Copy the design and style of materials, furniture, and decorative elements from Image 1.
+The SECOND image is the current room.`;
 };
 
-export const REFERENCE_GUIDANCE_OBJECT = (referenceMaterialDescription?: string) => {
+export const REFERENCE_GUIDANCE_OBJECT = (referenceMaterialDescription?: string, isFurniture?: boolean) => {
   const styleDetails = referenceMaterialDescription 
     ? `\n\nREFERENCE ANALYSIS DETAILS:\n${referenceMaterialDescription}\n\nUse these EXACT specifications from the reference analysis.`
     : '';
   
+  if (isFurniture) {
+    return `\n\nREFERENCE STYLE APPLICATION (CRITICAL - FOLLOW EXACTLY):
+
+The FIRST image is your style reference. You MUST REPLACE the target object with the reference object:
+${styleDetails}
+- REPLACE the entire object - match the EXACT design, shape, and material from the reference
+- The new object must match the reference object's style, proportions, and details
+- Ensure the replacement sits exactly in the current position and matches the room's perspective
+- Shadows must be physically accurate to the floor beneath it
+- Make the replacement clearly visible and match the reference precisely
+
+The SECOND image is the current image. Replace the target object with the reference object EXACTLY.
+Keep the object in its current position and maintain room structure.`;
+  }
+  
   return `\n\nREFERENCE STYLE APPLICATION (CRITICAL - FOLLOW EXACTLY):
 
-The FIRST image is your style reference. You MUST apply its EXACT style to the target object:
+The FIRST image is your style reference. You MUST apply its EXACT material/texture to the target object:
 ${styleDetails}
-- Match the EXACT materials, colors, textures, and finishes from the reference
-- Match the EXACT shape and design details from the reference if appropriate
+- Apply the EXACT materials, colors, textures, and finishes from the reference
+- Keep the current structure, size, and position - only change the material/surface
+- The transition between the new material and adjacent objects must be seamless
 - Make the transformation clearly visible and match the reference precisely
 
-The SECOND image is the current image. Transform the target object to match the reference style EXACTLY.
+The SECOND image is the current image. Transform the target object's material to match the reference EXACTLY.
 Keep the object in its current position and maintain room structure.`;
 };
 

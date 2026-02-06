@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Target, Key } from 'lucide-react';
-import { AuthButton } from './components/auth/AuthButton';
 import { useReasoningLogs } from './hooks/useReasoningLogs';
 import { usePinManagement } from './hooks/usePinManagement';
 import { useImageUpload } from './hooks/useImageUpload';
@@ -209,7 +208,7 @@ const App: React.FC = () => {
         clearTimeout(idleCallback);
       }
     };
-  }, [generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore]);
+  }, [generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore, editHistory.length]);
 
   useEffect(() => {
     // Clear analysis cache when version changes
@@ -288,6 +287,10 @@ const App: React.FC = () => {
     setLastAnalyzedImageHash(null);
     setQualityAnalysis(null);
     setActiveViewIndex(0);
+    // Clear feedback state
+    setShowEditFeedback(false);
+    setLastEditDescription('');
+    feedbackShownForRef.current.clear();
   };
 
   const getActiveBase64 = () => {
@@ -571,22 +574,29 @@ const App: React.FC = () => {
     }
   };
 
-  const handleApplyStyle = async (style: FloorPlanStyle) => {
+  const handleApplyStyle = async (style: FloorPlanStyle, selectedRoom?: IdentifiedObject) => {
     const activeBase64 = getActiveBase64();
     if (!activeBase64) {
       addLog(`⚠️ No active image to apply style to.`, 'error');
       return;
     }
 
-    const prompt = style.preview_prompt?.trim();
+    let prompt = style.preview_prompt?.trim();
     if (!prompt) {
       addLog(`⚠️ Style prompt is empty. Cannot apply style.`, 'error');
       return;
     }
 
+    // If a specific room is selected, modify the prompt to focus on that room
+    if (selectedRoom && roomAnalysis?.is_2d_plan) {
+      prompt = `Visualize the ${selectedRoom.name} from this floor plan in ${style.name} style. ${prompt}`;
+      addLog(`🎨 Applying ${style.name} style to ${selectedRoom.name}...`, 'action');
+    } else {
+      addLog(`🎨 Applying ${style.name} style...`, 'action');
+    }
+
     setHasAppliedStyle(true);
     setIsAssistantOpen(false);
-    addLog(`🎨 Applying ${style.name} style...`, 'action');
 
     // Record learning
     const mockSuggestion: DesignSuggestion = {
@@ -594,7 +604,7 @@ const App: React.FC = () => {
       title: style.name,
       description: style.description,
       action_type: 'EDIT',
-      target_object_name: 'Floor Plan',
+      target_object_name: selectedRoom?.name || 'Floor Plan',
       suggested_prompt: prompt,
       icon_hint: 'style',
       confidence: style.confidence,
@@ -847,11 +857,6 @@ const App: React.FC = () => {
       />
 
       <div className="w-[420px] h-full flex flex-col border-l border-slate-800 bg-slate-900 z-20 shadow-2xl relative">
-          {/* Auth Status for Imagen */}
-          <div className="px-4 py-2 border-b border-slate-800 flex justify-end">
-            <AuthButton />
-          </div>
-          
           <ReasoningPanel 
             logs={logs}
             status={isGeneratingRender ? 'Generating Visualization...' : status}
@@ -910,6 +915,10 @@ const App: React.FC = () => {
             styleCards={styleCards}
             onApplyStyle={handleApplyStyle}
             hasAppliedStyle={hasAppliedStyle}
+            availableRooms={roomAnalysis?.is_2d_plan ? scannedObjects.filter(obj => 
+              obj.category === 'Structure' && 
+              /room|bedroom|kitchen|living|bathroom|dining|office|study|bed|master|guest|family|den|library|loft|attic|basement|garage/i.test(obj.name)
+            ) : []}
           />
       </div>
 

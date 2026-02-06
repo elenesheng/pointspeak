@@ -72,18 +72,35 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
     };
     
     set(state => {
+      // CRITICAL: Always preserve the original (first version) - never delete it
       // If we are in the middle of history, we branch off (discarding future versions)
+      // BUT: Always keep versionOrder[0] (the original)
       const currentIndex = state.currentVersionId 
         ? state.versionOrder.indexOf(state.currentVersionId) 
         : -1;
-        
-      const newOrder = currentIndex >= 0 
+      
+      // CRITICAL: Always preserve the original (index 0) - never delete it
+      // Preserve original (index 0) and all versions up to current
+      const originalVersionId = state.versionOrder.length > 0 ? state.versionOrder[0] : null;
+      const preservedVersions = currentIndex >= 0 && state.versionOrder.length > 0
         ? state.versionOrder.slice(0, currentIndex + 1)
-        : [];
+        : state.versionOrder;
+      
+      // Ensure original is always first - never overwrite it
+      const newOrder = preservedVersions.length > 0 
+        ? [...preservedVersions, id]
+        : [id];
+      
+      // Preserve all versions including original - never delete original from versions object
+      const allVersions = { ...state.versions, [id]: snapshot };
+      // Ensure original version is never deleted
+      if (originalVersionId && state.versions[originalVersionId]) {
+        allVersions[originalVersionId] = state.versions[originalVersionId];
+      }
       
       return {
-        versions: { ...state.versions, [id]: snapshot },
-        versionOrder: [...newOrder, id],
+        versions: allVersions,
+        versionOrder: newOrder,
         currentVersionId: id
       };
     });
@@ -129,6 +146,13 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
       if (!state.currentVersionId) return state;
       const currentVersion = state.versions[state.currentVersionId];
       if (!currentVersion) return state;
+      
+      // CRITICAL: Never update the original version (index 0) - it must remain immutable
+      const isOriginal = state.versionOrder.length > 0 && state.versionOrder[0] === state.currentVersionId;
+      if (isOriginal) {
+        console.warn('[Versioning] Attempted to update original version - ignoring to preserve original');
+        return state;
+      }
       
       const updatedSnapshot = {
         ...currentVersion,

@@ -25,5 +25,6 @@ export const GEMINI_CONFIG = {
     ENABLE_CACHING: true,
     ENABLE_FALLBACK_GENERATION: true,
     PREFER_IMAGEN: true, // Try Imagen first if configured, fallback to Gemini
+    ENABLE_MULTI_PASS_GLOBAL_STYLE: true, // Enable multi-pass orchestration for global style edits
   }
 };

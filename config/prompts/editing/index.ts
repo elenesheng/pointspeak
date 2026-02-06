@@ -9,7 +9,7 @@ import { buildMoveAction, MovePromptParams } from './move';
 import { buildInternalModifyAction, InternalModifyPromptParams } from './internal';
 import { buildAlignmentAction, AlignmentPromptParams } from './alignment';
 import { buildDefaultAction, DefaultEditPromptParams } from './default';
-import { DIMENSION_CONSTRAINT, GROUNDING, PRESERVATION_BASIC } from '../templates/base';
+import { DIMENSION_CONSTRAINT, GROUNDING, PRESERVATION_BASIC, SPATIAL_AWARENESS_CONSTRAINTS, LAYOUT_PRESERVATION_CRITICAL, ROOM_IDENTITY_LOCK, PROHIBITED_BEHAVIOR } from '../templates/base';
 import { REFERENCE_GUIDANCE_GLOBAL, REFERENCE_GUIDANCE_OBJECT, REFERENCE_GUIDANCE_TEXT, QUALITY_REFERENCE } from '../templates/fragments';
 
 export interface EditingPromptParams {
@@ -28,6 +28,7 @@ export interface EditingPromptParams {
     position?: string;
   };
   isGlobalStyle: boolean;
+  isFurniture?: boolean;
   isSurface: boolean;
   isContainer: boolean;
   isAlignmentFix: boolean;
@@ -35,6 +36,7 @@ export interface EditingPromptParams {
   referenceImageBase64?: string | null;
   referenceMaterialDescription?: string | null;
   sceneInventory: string;
+  stylePlan?: any; // GlobalStylePlan from reasoning analysis
 }
 
 export const buildEditingPrompt = (params: EditingPromptParams): string => {
@@ -45,6 +47,7 @@ export const buildEditingPrompt = (params: EditingPromptParams): string => {
     identifiedObject,
     targetObject,
     isGlobalStyle,
+    isFurniture,
     isSurface,
     isContainer,
     isAlignmentFix,
@@ -52,6 +55,7 @@ export const buildEditingPrompt = (params: EditingPromptParams): string => {
     referenceImageBase64,
     referenceMaterialDescription,
     sceneInventory,
+    stylePlan,
   } = params;
 
   // Build action based on operation type
@@ -62,6 +66,9 @@ export const buildEditingPrompt = (params: EditingPromptParams): string => {
         objectDescription,
         proposedAction: translation.proposed_action,
         isGlobalStyle,
+        isFurniture,
+        isSurface,
+        hasReferenceImage: !!referenceImageBase64 && !isOriginalImageReference,
       });
       break;
     case 'INTERNAL_MODIFY':
@@ -108,41 +115,11 @@ export const buildEditingPrompt = (params: EditingPromptParams): string => {
     } else if (referenceMaterialDescription || referenceImageBase64) {
       // Strong reference style application - positive framing
       if (isGlobalStyle && referenceImageBase64) {
-        // Room-wide redesign with reference - STRONG application
-        const styleDetails = referenceMaterialDescription 
-          ? `\n\nREFERENCE ANALYSIS DETAILS:\n${referenceMaterialDescription}\n\nUse these EXACT specifications from the reference analysis.`
-          : '';
-        
-        referenceGuidance = `\n\nREFERENCE STYLE APPLICATION (CRITICAL - FOLLOW EXACTLY):
-
-The FIRST image is your style reference. You MUST apply its EXACT style throughout this room:
-${styleDetails}
-- Match the EXACT materials, colors, textures, and finishes visible in the reference image
-- Match the EXACT furniture styles, shapes, and arrangements from the reference where they fit the current layout
-- Match the EXACT decorative elements, accessories, and styling details
-- Match the EXACT lighting style, atmosphere, and overall aesthetic
-- If the reference shows specific colors (e.g., Beige/Cream, Terracotta/Burnt Orange), use those EXACT colors
-- If the reference shows specific materials (e.g., Matte Laminate, Glossy Ceramic Tile), use those EXACT materials
-
-The SECOND image is the current room to edit. Transform it to match the reference style EXACTLY while preserving structure.
-
-Preserve the existing room structure: wall positions, door locations, window positions, and plumbing fixtures stay exactly as they are.`;
+        // Room-wide redesign with reference - use centralized fragment with reasoning plan
+        referenceGuidance = REFERENCE_GUIDANCE_GLOBAL(referenceMaterialDescription, stylePlan);
       } else if (referenceImageBase64) {
-        // Object-specific style with reference - STRONG application
-        const styleDetails = referenceMaterialDescription 
-          ? `\n\nREFERENCE ANALYSIS DETAILS:\n${referenceMaterialDescription}\n\nUse these EXACT specifications from the reference analysis.`
-          : '';
-        
-        referenceGuidance = `\n\nREFERENCE STYLE APPLICATION (CRITICAL - FOLLOW EXACTLY):
-
-The FIRST image is your style reference. You MUST apply its EXACT style to the target object:
-${styleDetails}
-- Match the EXACT materials, colors, textures, and finishes from the reference
-- Match the EXACT shape and design details from the reference if appropriate
-- Make the transformation clearly visible and match the reference precisely
-
-The SECOND image is the current image. Transform the target object to match the reference style EXACTLY.
-Keep the object in its current position and maintain room structure.`;
+        // Object-specific style with reference - use centralized fragment with furniture detection
+        referenceGuidance = REFERENCE_GUIDANCE_OBJECT(referenceMaterialDescription, isFurniture);
       } else if (referenceMaterialDescription) {
         // Text-based style description - use EXACT details
         referenceGuidance = `\n\nSTYLE APPLICATION (USE EXACT DETAILS):
@@ -158,15 +135,37 @@ Do not generalize or approximate - match the specifications precisely.`;
   const context = `Target: ${objectDescription} at ${sourceCoords}.`;
 
   // Assemble prompt sections
-  const sections = [
-    GROUNDING,
-    DIMENSION_CONSTRAINT,
-    sceneInventory,
-    context,
-    action,
-    referenceGuidance,
-    PRESERVATION_BASIC,
-  ].filter(s => s && s.trim());
+  // For global style: Use minimal, non-conflicting constraints
+  // For object-specific: Use full constraint set
+  const sections: string[] = [];
+  
+  if (isGlobalStyle && referenceImageBase64) {
+    // Global style: Minimal constraints to avoid conflict
+    sections.push(
+      GROUNDING,
+      ROOM_IDENTITY_LOCK, // Single unified constraint block
+      sceneInventory,
+      context,
+      action,
+      referenceGuidance,
+      PROHIBITED_BEHAVIOR,
+      SPATIAL_AWARENESS_CONSTRAINTS
+    );
+  } else {
+    // Object-specific: Full constraint set
+    sections.push(
+      GROUNDING,
+      DIMENSION_CONSTRAINT,
+      sceneInventory,
+      context,
+      action,
+      referenceGuidance,
+      PRESERVATION_BASIC,
+      isGlobalStyle ? SPATIAL_AWARENESS_CONSTRAINTS : ''
+    );
+  }
+
+  return sections.filter(s => s && s.trim()).join('\n\n');
 
   return sections.join('\n\n');
 };

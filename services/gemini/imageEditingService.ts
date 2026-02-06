@@ -2,13 +2,12 @@ import { GoogleGenAI } from '@google/genai';
 import { IntentTranslation } from '../../types/ai.types';
 import { DetailedRoomAnalysis, IdentifiedObject } from '../../types/spatial.types';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { isVertexConfigured } from '../../config/vertex.config';
 import { getApiKey } from '../../utils/apiUtils';
 import { convertToJPEG, convertToPNG, normalizeBase64 } from '../../utils/imageProcessing';
-import { generateMaskFromBoundingBox, generateCombinedMask, generateMaskAtPosition } from '../../utils/maskGeneration';
-import { performImagenInpaint, removeWithImagen, insertWithImagen, ImagenInpaintResponse } from '../vertex/imagenService';
 import { recordEdit } from './contextCacheService';
 import { buildEditingPrompt } from '../../config/prompts/editing';
+import { analyzeGlobalStyleApplication, GlobalStylePlan } from './globalStyleAnalysisService';
+import { REFERENCE_IMAGE_USAGE_RULE, SCALE_NORMALIZATION_RULE, SPATIAL_AWARENESS_CONSTRAINTS } from '../../config/prompts/templates/base';
 
 // Constants
 const GLOBAL_CONTEXT_ID = 'global_room_context';
@@ -24,11 +23,6 @@ const TOP_P = 0.85;
 const TOP_K = 25;
 const IMAGE_SIZE_2K = '2K';
 const MIME_TYPE_JPEG = 'image/jpeg';
-
-/**
- * Main image editing function that orchestrates Imagen (primary) and Gemini (fallback).
- */
-// Learning context interface for AI behavior adjustment
 export interface LearningContext {
   stylePreferences: string[];
   avoidedActions: string[];
@@ -47,50 +41,11 @@ export const performImageEdit = async (
   referenceImageBase64?: string | null,
   isOriginalImageReference?: boolean,
   allDetectedObjects?: IdentifiedObject[],
-  learningContext?: LearningContext
+  learningContext?: LearningContext,
+  onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
 ): Promise<string> => {
 
-  // Try Imagen first if configured and object has bounding box
-  // BUT: Skip Imagen for style transfer with reference images (Gemini handles those better)
-  const preferImagen = GEMINI_CONFIG.FLAGS.PREFER_IMAGEN;
-  const vertexConfigured = isVertexConfigured();
-  const hasBoundingBox = !!identifiedObject.box_2d;
-  const hasReferenceImage = !!referenceImageBase64 && !isOriginalImageReference;
-  
-  // Use Imagen for REMOVE and simple edits, but use Gemini for style transfer with reference images
-  const shouldUseImagen = preferImagen && vertexConfigured && hasBoundingBox && !hasReferenceImage;
-
-  if (shouldUseImagen) {
-    try {
-      console.log('[ImageEdit] Attempting Imagen inpainting...');
-      const result = await performImagenEdit(
-        currentImageBase64,
-        translation,
-        identifiedObject,
-        targetObject,
-        referenceMaterialDescription,
-        learningContext
-      );
-
-      if (result) {
-        console.log('[ImageEdit] Imagen inpainting successful');
-        return result;
-      }
-    } catch (imagenError) {
-      const errorMessage = imagenError instanceof Error ? imagenError.message : String(imagenError);
-      console.warn('[ImageEdit] Imagen failed, falling back to Gemini:', errorMessage);
-    }
-  } else {
-    // Log why Imagen isn't being used
-    const reasons = [];
-    if (!preferImagen) reasons.push('PREFER_IMAGEN flag is false');
-    if (!vertexConfigured) reasons.push('Vertex AI not configured (set VERTEX_PROJECT_ID and VERTEX_LOCATION)');
-    if (!hasBoundingBox) reasons.push('Object has no bounding box (box_2d)');
-    if (hasReferenceImage) reasons.push('Reference image provided (Gemini handles style transfer better)');
-    console.log(`[ImageEdit] Skipping Imagen: ${reasons.join(', ')}`);
-  }
-
-  // Fallback to Gemini
+  // Always use Gemini for image editing
   console.log('[ImageEdit] Using Gemini for image editing');
   return performGeminiEdit(
     currentImageBase64,
@@ -103,205 +58,311 @@ export const performImageEdit = async (
     referenceImageBase64,
     isOriginalImageReference,
     allDetectedObjects,
-    learningContext
+    learningContext,
+    onPassUpdate
   );
 };
 
+
 /**
- * Performs image editing using Vertex AI Imagen with mask-based inpainting.
- * Note: Imagen is best for REMOVE operations and simple text-based edits.
- * For style transfer with reference images, Gemini is preferred.
+ * Build focused prompt for materials pass
  */
-const performImagenEdit = async (
-  currentImageBase64: string,
-  translation: IntentTranslation,
-  identifiedObject: IdentifiedObject,
-  targetObject?: IdentifiedObject,
-  referenceMaterialDescription?: string,
-  learningContext?: LearningContext // Not used - Imagen doesn't use learning context
-): Promise<string | null> => {
+const buildMaterialsPassPrompt = (
+  stylePlan: GlobalStylePlan,
+  surfaces: Array<{ surface: string; material: string; finish: string; color: string }>,
+  referenceImageBase64: string
+): string => {
+  const surfaceList = surfaces.map(s => 
+    `- ${s.surface}: Apply ${s.material} with ${s.finish} finish in ${s.color}`
+  ).join('\n');
 
-  const normalizedImage = normalizeBase64(currentImageBase64);
+  const colorPalette = stylePlan.reference_analysis.color_palette.join(', ');
 
-  switch (translation.operation_type) {
-    case 'REMOVE':
-      return performImagenRemove(normalizedImage, identifiedObject);
+  const colorList = stylePlan.reference_analysis.color_palette.map((c, i) => `- ${c}`).join('\n');
 
-    case 'EDIT':
-    case 'STYLE':
-    case 'INTERNAL_MODIFY':
-      return performImagenStyleEdit(normalizedImage, identifiedObject, translation, referenceMaterialDescription, learningContext);
+  return `PASS 1: Apply materials from Image 1 to Image 2.
 
-    case 'MOVE':
-      return performImagenMove(normalizedImage, identifiedObject, targetObject, translation, learningContext);
+Keep the SECOND image's camera and layout exactly as shown.
+Only change materials - not furniture, decor, or structural elements.
 
-    case 'SWAP':
-      return performImagenSwap(normalizedImage, identifiedObject, targetObject, translation);
+USE ONLY THESE COLORS FROM IMAGE 1:
+${colorList}
 
-    default:
-      console.warn(`[Imagen] Unsupported operation type: ${translation.operation_type}`);
-      return null;
-  }
+MATERIALS TO APPLY:
+${surfaceList}
+
+Copy these materials to the specified surfaces. Use only the colors listed above.
+The SECOND image is the current room - preserve its camera and all structural elements exactly.`;
 };
 
 /**
- * REMOVE operation: Erase object and fill with background.
+ * Build focused prompt for furniture pass
  */
-const performImagenRemove = async (
-  imageBase64: string,
-  object: IdentifiedObject
-): Promise<string | null> => {
-  if (!object.box_2d) {
-    console.warn('[Imagen] REMOVE: No bounding box available');
-    return null;
-  }
+const buildFurniturePassPrompt = (
+  stylePlan: GlobalStylePlan,
+  toAdd: string[],
+  toReplace: string[],
+  referenceImageBase64: string
+): string => {
+  const addList = toAdd.map(f => `- ADD: ${f}`).join('\n');
+  const replaceList = toReplace.map(f => `- REPLACE: ${f}`).join('\n');
+  const furnitureStyles = stylePlan.reference_analysis.furniture_styles.join(', ');
 
-  const mask = await generateMaskFromBoundingBox(imageBase64, object.box_2d);
-  const result = await removeWithImagen(imageBase64, mask);
+  return `PASS 2: Copy furniture from Image 1 to Image 2.
 
-  if (result.success && result.images.length > 0) {
-    return `data:image/png;base64,${result.images[0]}`;
-  }
+Keep the SECOND image's camera and layout exactly as shown.
+Preserve materials from Pass 1.
+Don't block paths or plumbing.
 
-  throw new Error(result.error || 'Imagen REMOVE failed');
+FURNITURE FROM IMAGE 1:
+${addList ? `ADD:\n${addList}\n` : ''}
+${replaceList ? `REPLACE:\n${replaceList}\n` : ''}
+
+Copy these furniture items from Image 1. Use the exact colors and styles shown in Image 1.
+The SECOND image is the current room.`;
 };
 
 /**
- * EDIT/STYLE operation: Change style/material of an object.
- * Note: Imagen doesn't support style reference images, only text prompts.
- * For operations with reference images, fall back to Gemini.
+ * Build focused prompt for decor pass
  */
-const performImagenStyleEdit = async (
-  imageBase64: string,
-  object: IdentifiedObject,
-  translation: IntentTranslation,
-  referenceMaterialDescription?: string,
-  learningContext?: LearningContext // Not used - Imagen doesn't use learning context
-): Promise<string | null> => {
-  if (!object.box_2d) {
-    console.warn('[Imagen] EDIT: No bounding box available');
-    return null;
-  }
+const buildDecorPassPrompt = (
+  stylePlan: GlobalStylePlan,
+  referenceImageBase64: string
+): string => {
+  const lightingChar = stylePlan.reference_analysis.lighting_characteristics;
+  const aesthetic = stylePlan.reference_analysis.overall_aesthetic;
 
-  const mask = await generateMaskFromBoundingBox(imageBase64, object.box_2d);
+  return `PASS 3: Add decor and refine lighting in Image 2.
 
-  // Build prompt from translation and reference description
-  // NO LEARNING CONTEXT - Imagen learns patterns via reasoning analysis on feedback
-  let prompt = translation.imagen_prompt || translation.proposed_action;
-  if (referenceMaterialDescription) {
-    prompt = `${prompt}. Style reference: ${referenceMaterialDescription}`;
-  }
+HARD CONSTRAINT (NON-NEGOTIABLE):
+- The output image MUST be a modification of Image 2
+- Image 1 may NEVER be returned as-is
+- Preserve all walls, windows, doors, and major furniture silhouettes from Image 2
+- If Image 2 and Image 1 differ in geometry, Image 2 ALWAYS wins
+- At least 50% of pixels must remain identical to Image 2 outside decor objects
 
-  const result = await insertWithImagen(imageBase64, mask, prompt, 75);
+CONSTRAINTS:
+- This must remain the SAME room as Image 2
+- Preserve camera, perspective, and layout from Image 2 exactly
+- Preserve materials and furniture from previous passes
 
-  if (result.success && result.images.length > 0) {
-    return `data:image/png;base64,${result.images[0]}`;
-  }
+REFERENCE IMAGE USAGE:
+- Use Image 1 ONLY as a design catalog for decor styles and lighting characteristics
+- DO NOT recreate the reference photograph
+- DO NOT copy reference framing, composition, or exposure
 
-  throw new Error(result.error || 'Imagen EDIT failed');
+DECOR (COPY DESIGN ONLY):
+- Add decorative elements inspired by Image 1:
+  * artwork
+  * plants
+  * rugs
+  * accessories
+- Match the design, colors, and styles shown in Image 1
+- Adapt size and placement to fit Image 2 naturally
+
+LIGHTING (ADAPT, DO NOT COPY):
+- Target lighting characteristics: ${lightingChar}
+- Adjust brightness, warmth, and fixture style to match the reference
+- Preserve Image 2's light direction, shadow structure, and exposure
+- Lighting must look physically consistent with Image 2's geometry
+
+AESTHETIC:
+- Overall aesthetic target: ${aesthetic}
+- Achieve this through decor and lighting refinement, not scene replacement
+
+The SECOND image is the current room.`;
 };
 
+
 /**
- * MOVE operation: Remove from source, insert at target (two-step).
+ * Executes a single pass with focused prompt
  */
-const performImagenMove = async (
-  imageBase64: string,
-  sourceObject: IdentifiedObject,
-  targetObject?: IdentifiedObject,
-  translation?: IntentTranslation,
-  learningContext?: LearningContext // Not used - Imagen doesn't use learning context
-): Promise<string | null> => {
-  if (!sourceObject.box_2d) {
-    console.warn('[Imagen] MOVE: No source bounding box available');
-    return null;
-  }
+const executePass = async (
+  inputImageBase64: string,
+  prompt: string,
+  referenceImageBase64: string,
+  preferredModelId: string,
+  passName: string
+): Promise<string> => {
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
 
-  // Step 1: Remove object from source location
-  const sourceMask = await generateMaskFromBoundingBox(imageBase64, sourceObject.box_2d);
-  const clearedResult = await removeWithImagen(imageBase64, sourceMask);
+  // Convert images to JPEG for API (high quality to prevent degradation)
+  const [referenceJpeg, currentJpeg] = await Promise.all([
+    convertToJPEG(normalizeBase64(referenceImageBase64), 0.98), // Higher quality
+    convertToJPEG(normalizeBase64(inputImageBase64), 0.98), // Higher quality
+  ]);
 
-  if (!clearedResult.success || clearedResult.images.length === 0) {
-    throw new Error(clearedResult.error || 'Imagen MOVE Step 1 (remove) failed');
-  }
+  // Add canonical rules to all passes (single source of truth)
+  const fullPrompt = `${prompt}
 
-  const clearedImage = clearedResult.images[0];
+${REFERENCE_IMAGE_USAGE_RULE}
 
-  // Step 2: Insert object at target location
-  let targetMask: string;
+${SCALE_NORMALIZATION_RULE}
 
-  if (targetObject?.box_2d) {
-    // Use target object's bounding box
-    targetMask = await generateMaskFromBoundingBox(clearedImage, targetObject.box_2d);
-  } else if (targetObject?.position) {
-    // Parse position string like "[x,y]" to coordinates
-    const posMatch = targetObject.position.match(/\[?\s*(\d+)\s*,\s*(\d+)\s*\]?/);
-    if (posMatch) {
-      const targetPos = { x: parseInt(posMatch[1]), y: parseInt(posMatch[2]) };
-      targetMask = await generateMaskAtPosition(clearedImage, sourceObject.box_2d, targetPos);
-    } else {
-      throw new Error('Invalid target position format');
+${SPATIAL_AWARENESS_CONSTRAINTS}`;
+
+  const parts = [
+    { inlineData: { mimeType: MIME_TYPE_JPEG, data: referenceJpeg } },
+    { inlineData: { mimeType: MIME_TYPE_JPEG, data: currentJpeg } },
+    { text: fullPrompt },
+  ];
+
+  const isPro = preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO;
+  const temperature = isPro ? 0.2 : 0.15; // Low temperature for accurate copying
+
+  const response = await ai.models.generateContent({
+    model: preferredModelId,
+    contents: { parts },
+    config: {
+      temperature,
+      topP: TOP_P,
+      topK: TOP_K,
+      imageConfig: isPro ? { imageSize: IMAGE_SIZE_2K } : undefined,
+    },
+  });
+
+  // Extract result
+  let resultBase64: string | null = null;
+  for (const part of response.candidates?.[0]?.content?.parts || []) {
+    if (part.inlineData?.data) {
+      resultBase64 = part.inlineData.data;
+      break;
     }
-  } else {
-    throw new Error('No target location specified for MOVE operation');
   }
 
-  // Build prompt for insertion
-  // NO LEARNING CONTEXT - Imagen learns patterns via reasoning analysis on feedback
-  const prompt = sourceObject.visual_details || sourceObject.name;
-  const insertResult = await insertWithImagen(clearedImage, targetMask, prompt);
-
-  if (insertResult.success && insertResult.images.length > 0) {
-    return `data:image/png;base64,${insertResult.images[0]}`;
+  if (!resultBase64) {
+    throw new Error(`${passName} failed: No image generated`);
   }
 
-  throw new Error(insertResult.error || 'Imagen MOVE Step 2 (insert) failed');
+  // Convert to PNG for lossless storage
+  const pngBase64 = await convertToPNG(resultBase64);
+  return `data:image/png;base64,${pngBase64}`;
 };
 
 /**
- * SWAP operation: Exchange positions of two objects (three-step).
+ * Orchestrates multi-pass global style transfer
+ * Each pass focuses on a specific transformation type
  */
-const performImagenSwap = async (
-  imageBase64: string,
-  objectA: IdentifiedObject,
-  objectB?: IdentifiedObject,
-  translation?: IntentTranslation
-): Promise<string | null> => {
-  if (!objectA.box_2d || !objectB?.box_2d) {
-    console.warn('[Imagen] SWAP: Both objects need bounding boxes');
-    return null;
+const performMultiPassGlobalStyle = async (
+  initialImageBase64: string,
+  stylePlan: GlobalStylePlan,
+  referenceImageBase64: string,
+  preferredModelId: string,
+  onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
+): Promise<string> => {
+  console.log('[MultiPass] Starting orchestrated global style transfer');
+  
+  // Build pass configuration from style plan
+  const hasMaterials = stylePlan.application_strategy.materials_to_apply.length > 0;
+  const hasFurniture = (stylePlan.application_strategy.furniture_to_add.length > 0 || 
+                        stylePlan.application_strategy.furniture_to_replace.length > 0);
+
+  let currentImage = initialImageBase64;
+  let passNumber = 0;
+
+  // PASS 1: MATERIALS TRANSFORMATION
+  if (hasMaterials) {
+    passNumber++;
+    const passName = `Pass ${passNumber}: Materials`;
+    console.log(`[MultiPass] ${passName} (${stylePlan.application_strategy.materials_to_apply.length} surfaces)`);
+    
+    if (onPassUpdate) {
+      onPassUpdate(passNumber, passName, currentImage);
+    }
+    
+    const materialsPrompt = buildMaterialsPassPrompt(
+      stylePlan,
+      stylePlan.application_strategy.materials_to_apply,
+      referenceImageBase64
+    );
+
+    try {
+      currentImage = await executePass(
+        currentImage,
+        materialsPrompt,
+        referenceImageBase64,
+        preferredModelId,
+        passName
+      );
+      console.log(`[MultiPass] ${passName} completed successfully`);
+      if (onPassUpdate) {
+        onPassUpdate(passNumber, passName, currentImage);
+      }
+    } catch (passError) {
+      console.error(`[MultiPass] ${passName} failed:`, passError);
+      throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
+    }
   }
 
-  // Step 1: Remove both objects
-  const combinedMask = await generateCombinedMask(imageBase64, [objectA.box_2d, objectB.box_2d]);
-  const clearedResult = await removeWithImagen(imageBase64, combinedMask);
+  // PASS 2: FURNITURE TRANSFORMATION
+  if (hasFurniture) {
+    passNumber++;
+    const passName = `Pass ${passNumber}: Furniture`;
+    console.log(`[MultiPass] ${passName}`);
+    
+    if (onPassUpdate) {
+      onPassUpdate(passNumber, passName, currentImage);
+    }
+    
+    const furniturePrompt = buildFurniturePassPrompt(
+      stylePlan,
+      stylePlan.application_strategy.furniture_to_add,
+      stylePlan.application_strategy.furniture_to_replace,
+      referenceImageBase64
+    );
 
-  if (!clearedResult.success || clearedResult.images.length === 0) {
-    throw new Error(clearedResult.error || 'Imagen SWAP Step 1 (remove both) failed');
+    try {
+      currentImage = await executePass(
+        currentImage,
+        furniturePrompt,
+        referenceImageBase64,
+        preferredModelId,
+        passName
+      );
+      console.log(`[MultiPass] ${passName} completed successfully`);
+      if (onPassUpdate) {
+        onPassUpdate(passNumber, passName, currentImage);
+      }
+    } catch (passError) {
+      console.error(`[MultiPass] ${passName} failed:`, passError);
+      throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
+    }
   }
 
-  let currentImage = clearedResult.images[0];
+  // PASS 3: DECOR & LIGHTING POLISH (always enabled)
+  passNumber++;
+  const passName = `Pass ${passNumber}: Decor`;
+  console.log(`[MultiPass] ${passName}`);
+  
+  if (onPassUpdate) {
+    onPassUpdate(passNumber, passName, currentImage);
+  }
+  
+  const decorPrompt = buildDecorPassPrompt(
+    stylePlan,
+    referenceImageBase64
+  );
 
-  // Step 2: Insert object A at object B's location
-  const maskAtB = await generateMaskFromBoundingBox(currentImage, objectB.box_2d);
-  const promptA = objectA.visual_details || objectA.name;
-  const insertAResult = await insertWithImagen(currentImage, maskAtB, promptA);
-
-  if (!insertAResult.success || insertAResult.images.length === 0) {
-    throw new Error(insertAResult.error || 'Imagen SWAP Step 2 (insert A at B) failed');
+  try {
+    currentImage = await executePass(
+      currentImage,
+      decorPrompt,
+      referenceImageBase64,
+      preferredModelId,
+      passName
+    );
+    console.log(`[MultiPass] ${passName} completed successfully`);
+    if (onPassUpdate) {
+      onPassUpdate(passNumber, passName, currentImage);
+    }
+  } catch (passError) {
+    console.error(`[MultiPass] ${passName} failed:`, passError);
+    throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
   }
 
-  currentImage = insertAResult.images[0];
-
-  // Step 3: Insert object B at object A's location
-  const maskAtA = await generateMaskFromBoundingBox(currentImage, objectA.box_2d);
-  const promptB = objectB.visual_details || objectB.name;
-  const insertBResult = await insertWithImagen(currentImage, maskAtA, promptB);
-
-  if (insertBResult.success && insertBResult.images.length > 0) {
-    return `data:image/png;base64,${insertBResult.images[0]}`;
-  }
-
-  throw new Error(insertBResult.error || 'Imagen SWAP Step 3 (insert B at A) failed');
+  console.log(`[MultiPass] Completed ${passNumber} passes successfully`);
+  return currentImage;
 };
 
 /**
@@ -320,7 +381,8 @@ const performGeminiEdit = async (
   referenceImageBase64?: string | null,
   isOriginalImageReference?: boolean,
   allDetectedObjects?: IdentifiedObject[],
-  learningContext?: LearningContext
+  learningContext?: LearningContext,
+  onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
 ): Promise<string> => {
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
@@ -369,9 +431,10 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
    * 4. Operation-specific prompts (my contribution)
    */
 
-  const buildPrompt = (isPro: boolean): string => {
+  const buildPrompt = async (isPro: boolean, stylePlan?: GlobalStylePlan): Promise<string> => {
     // Object type detection (use original name for pattern matching)
     const originalName = identifiedObject.name;
+    const isFurniture = /chair|sofa|table|bed|stool|seating|furniture/i.test(originalName);
     const isContainer = /shelf|shelves|cabinet|bookcase|rack|display|drawer/i.test(originalName);
     const isSurface = /counter|countertop|table|desk|worktop|surface/i.test(originalName);
     
@@ -395,6 +458,7 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
       identifiedObject,
       targetObject,
       isGlobalStyle,
+      isFurniture,
       isSurface,
       isContainer,
       isAlignmentFix,
@@ -402,12 +466,52 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
       referenceImageBase64,
       referenceMaterialDescription,
       sceneInventory,
+      stylePlan,
     });
   };
 
   try {
     const isPro = preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO;
-    const prompt = buildPrompt(isPro);
+    
+    // Check if this is a global style edit with reference image - use reasoning analysis
+    const isGlobalStyle = identifiedObject.id === GLOBAL_CONTEXT_ID || 
+                         !identifiedObject.box_2d ||
+                         GLOBAL_STYLE_KEYWORDS.test(translation.proposed_action);
+    const hasReferenceImage = !!referenceImageBase64 && !isOriginalImageReference;
+    
+    let stylePlan: GlobalStylePlan | undefined;
+    if (isGlobalStyle && hasReferenceImage) {
+      console.log('[ImageEdit] Performing reasoning-based analysis for global style edit...');
+      try {
+        const sceneInventory = buildSceneInventory();
+        stylePlan = await analyzeGlobalStyleApplication(
+          currentImageBase64,
+          referenceImageBase64,
+          spatialContext,
+          sceneInventory
+        );
+        console.log('[ImageEdit] Reasoning analysis complete');
+        
+        // Route to multi-pass orchestration if enabled
+        if (GEMINI_CONFIG.FLAGS.ENABLE_MULTI_PASS_GLOBAL_STYLE && stylePlan) {
+          console.log('[ImageEdit] Using multi-pass orchestration for global style');
+          return performMultiPassGlobalStyle(
+            currentImageBase64,
+            stylePlan,
+            referenceImageBase64,
+            preferredModelId,
+            onPassUpdate
+          );
+        }
+        
+        console.log('[ImageEdit] Using single-pass with plan for style application');
+      } catch (analysisError) {
+        console.warn('[ImageEdit] Reasoning analysis failed, proceeding without plan:', analysisError);
+        // Continue without plan - prompt will still work
+      }
+    }
+    
+    const prompt = await buildPrompt(isPro, stylePlan);
 
     console.log('[ImageEdit] Editing...');
 
@@ -422,12 +526,12 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
     // Build parts array - reference image FIRST for better style application
     const parts: ContentPart[] = [];
     
-    // Parallel image conversion for performance
+    // Parallel image conversion for performance (high quality to prevent degradation)
     const conversionPromises: Promise<string>[] = [];
     if (referenceImageBase64 && !isOriginalImageReference) {
-      conversionPromises.push(convertToJPEG(normalizeBase64(referenceImageBase64)));
+      conversionPromises.push(convertToJPEG(normalizeBase64(referenceImageBase64), 0.98)); // Higher quality
     }
-    conversionPromises.push(convertToJPEG(normalizeBase64(currentImageBase64)));
+    conversionPromises.push(convertToJPEG(normalizeBase64(currentImageBase64), 0.98)); // Higher quality
     
     // Wait for all conversions in parallel
     const convertedImages = await Promise.all(conversionPromises);
@@ -451,11 +555,16 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
     // LOWERED temperatures across the board to prevent hallucinations (logo generation, etc.)
     const isInternalModify = translation.operation_type === 'INTERNAL_MODIFY';
     const isRemoval = translation.operation_type === 'REMOVE';
+    const isGlobalStyleWithReference = isGlobalStyle && hasReferenceImage;
     
     // Temperature: Lower = more deterministic, less hallucination
+    // Higher temperature for global style edits to encourage comprehensive transformations
     let temperature: number;
     if (isInternalModify || isRemoval) {
       temperature = isPro ? TEMPERATURE_PRECISION : TEMPERATURE_FLASH_PRECISION;
+    } else if (isGlobalStyleWithReference) {
+      // Higher creativity for global style edits to encourage comprehensive changes
+      temperature = isPro ? 0.2 : 0.15; // Low temperature for accurate reference copying
     } else {
       temperature = isPro ? TEMPERATURE_CREATIVE : TEMPERATURE_FLASH_CREATIVE;
     }
