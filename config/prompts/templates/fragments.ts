@@ -29,33 +29,36 @@ export const REFERENCE_GUIDANCE_GLOBAL = (referenceMaterialDescription?: string,
   
   // Build concrete feature enumeration from style plan
   const featureEnumeration = stylePlan?.application_strategy?.materials_to_apply?.length
-    ? `\n\nCOPY THESE VISIBLE FEATURES FROM THE REFERENCE IMAGE:\n${stylePlan.application_strategy.materials_to_apply.map((m: any) => {
+    ? `\n\nAPPLY THESE MATERIALS FROM THE SECOND IMAGE:\n${stylePlan.application_strategy.materials_to_apply.map((m: any) => {
         if (typeof m === 'string') {
           return `- ${m}`;
         } else {
-          return `- ${m.surface}: Copy ${m.material} material with ${m.finish} finish in ${m.color}`;
+          return `- ${m.surface}: Apply ${m.material} material with ${m.finish} finish in ${m.color}`;
         }
       }).join('\n')}`
     : '';
 
   const furnitureEnumeration = stylePlan?.application_strategy?.furniture_to_add?.length || stylePlan?.application_strategy?.furniture_to_replace?.length
-    ? `\n\nCOPY THESE FURNITURE ITEMS FROM THE REFERENCE IMAGE:\n${stylePlan.application_strategy.furniture_to_add?.map((f: string) => `- ADD: ${f}`).join('\n') || ''}${stylePlan.application_strategy.furniture_to_replace?.map((f: string) => `- REPLACE with: ${f}`).join('\n') || ''}`
+    ? `\n\nAPPLY THESE FURNITURE STYLES FROM THE SECOND IMAGE:\n${stylePlan.application_strategy.furniture_to_add?.map((f: string) => `- ADD: ${f}`).join('\n') || ''}${stylePlan.application_strategy.furniture_to_replace?.map((f: string) => `- REPLACE with: ${f}`).join('\n') || ''}`
     : '';
 
   const colorList = stylePlan?.reference_analysis?.color_palette?.length
-    ? `\n\nUSE ONLY THESE COLORS FROM IMAGE 1:\n${stylePlan.reference_analysis.color_palette.map((c: string) => `- ${c}`).join('\n')}`
+    ? `\n\nUSE ONLY THESE COLORS FROM THE SECOND IMAGE:\n${stylePlan.reference_analysis.color_palette.map((c: string) => `- ${c}`).join('\n')}`
     : '';
 
-  return `\n\nCOPY VISIBLE FEATURES FROM IMAGE 1 TO IMAGE 2.
+  return `\n\nOUTPUT RULE (CRITICAL):
+- The output MUST be a modification of the FIRST image provided
+- NEVER output the second image or a re-creation of it
+- If the second image already satisfies the request, you must still modify the first image instead
 
-CONSTRAINTS:
+STYLE APPLICATION:
 - Same room, same camera, same layout
 - Don't block paths or plumbing
 
 ${colorList}${featureEnumeration}${furnitureEnumeration}${materialsList}${furnitureGuidance}${planInstructions}
 
-Copy the design and style of materials, furniture, and decorative elements from Image 1.
-The SECOND image is the current room.`;
+Apply the design and style of materials, furniture, and decorative elements from the second image to the first image.
+Translate the reference STYLE into the current room. Return the FIRST image modified.`;
 };
 
 export const REFERENCE_GUIDANCE_OBJECT = (referenceMaterialDescription?: string, isFurniture?: boolean) => {

@@ -19,19 +19,37 @@ export const ROOM_ANALYSIS_SYSTEM_INSTRUCTION = `
             - Spatial relationships (open vs. compartmentalized)
             - Natural light sources (windows, openings, orientation)
             - Traffic flow patterns and functional zones
-            - Structural elements (load-bearing walls, columns)
-            - Plumbing locations (kitchen, bathrooms - CRITICAL: these cannot be moved)
+            - Structural elements (columns, beams - only if clearly visible)
+            - Plumbing locations (kitchen, bathrooms - only if explicitly labeled or clearly indicated by standard symbols)
             - Room sizes and their optimal functions
 
+            CRITICAL:
+            Do NOT assume load-bearing walls, plumbing, HVAC, or electrical constraints unless:
+            - Explicitly labeled in the plan, OR
+            - Clearly indicated by standard architectural symbols.
+
+            If uncertain, state: "Cannot be determined from this plan."
+
             STEP 2: STRUCTURAL CONSTRAINT IDENTIFICATION
-            Identify what CANNOT be changed:
-            - Kitchen plumbing walls (sink, dishwasher locations)
-            - Bathroom plumbing walls (toilet, sink, shower locations)
-            - Load-bearing walls (typically exterior and central support walls)
-            - HVAC and electrical constraints
-            - Structural columns and beams
+            Identify what CANNOT be changed (only if explicitly visible or labeled):
+            - Kitchen plumbing walls (sink, dishwasher locations - only if clearly marked)
+            - Bathroom plumbing walls (toilet, sink, shower locations - only if clearly marked)
+            - Load-bearing walls (only if explicitly labeled or indicated by standard symbols)
+            - HVAC and electrical constraints (only if clearly visible or labeled)
+            - Structural columns and beams (only if clearly visible)
+
+            CRITICAL:
+            Do NOT assume load-bearing walls, plumbing, HVAC, or electrical constraints unless:
+            - Explicitly labeled in the plan, OR
+            - Clearly indicated by standard architectural symbols.
+
+            If uncertain, state: "Cannot be determined from this plan."
 
             STEP 3: INTELLIGENT STYLE RECOMMENDATIONS
+
+            You MUST explicitly reference at least 2 geometric observations from STEP 1 before recommending a style.
+            If you cannot justify a style with geometry, do NOT recommend it.
+
             Based on the geometry analysis, recommend styles that enhance the plan's natural characteristics:
             - Open spaces → Modern, Industrial, Minimalist (enhance openness)
             - Compartmentalized → Traditional, Cottage, French Country (enhance coziness)
@@ -39,7 +57,7 @@ export const ROOM_ANALYSIS_SYSTEM_INSTRUCTION = `
             - Symmetrical/formal → Neoclassical, Mid-Century Modern (enhance structure)
             - Small spaces → Scandinavian, Minimalist (maximize perceived space)
             
-            For each recommended style, explain WHY it fits THIS specific geometry.
+            For each recommended style, explain WHY it fits THIS specific geometry by referencing specific geometric features from STEP 1.
 
             STEP 4: STRUCTURAL MODIFICATION SUGGESTIONS (IF APPROPRIATE)
             Only suggest wall removals for:
@@ -48,7 +66,11 @@ export const ROOM_ANALYSIS_SYSTEM_INSTRUCTION = `
             - Walls that improve flow without compromising structure
             Always explain the benefit and verify it's safe.
 
-            STEP 5: GENERATE 4 DISTINCT INSIGHTS
+            STEP 5: GENERATE UP TO 4 HIGH-VALUE INSIGHTS
+            Generate UP TO 4 high-value insights.
+            If fewer than 4 meaningful insights exist, return fewer.
+            Do NOT invent issues to reach a number.
+
             Each insight should be:
             - Title: Specific recommendation based on analysis
             - Description: Why this works for THIS plan's geometry
@@ -56,13 +78,18 @@ export const ROOM_ANALYSIS_SYSTEM_INSTRUCTION = `
             - System Instruction: Technical rendering preset if applicable
 
             --- IF 3D ROOM DETECTED ---
+            Generate UP TO 4 high-value insights based on what you actually observe.
+            If fewer than 4 meaningful insights exist, return fewer.
+            Do NOT invent issues to reach a number.
+
+            Suggested insight categories (use only if relevant):
             - Insight 1: Design Critique & Alignment Check.
               * LOOK FOR SYMMETRY/ALIGNMENT ERRORS.
               * Example: "The Refrigerator top is not aligned with the Oven stack."
               * Suggest specific prompt: "Fix vertical alignment of the refrigerator and oven."
-            - Insight 2: Lighting/Atmosphere Suggestion.
-            - Insight 3: Furniture/Layout optimization.
-            - Insight 4: Color Palette recommendation.
+            - Insight 2: Lighting/Atmosphere Suggestion (only if lighting issues are visible).
+            - Insight 3: Furniture/Layout optimization (only if layout issues exist).
+            - Insight 4: Color Palette recommendation (only if color issues are present).
           `;
 
 export const getRoomAnalysisInstruction = (): string => {
@@ -84,6 +111,10 @@ export const buildUpdateInsightsPrompt = (editDescription: string): string => {
      "CMD: ENHANCE_REALISM. PARAMS: { texture_fidelity: high, lighting: ambient_occlusion }."
      
   2. "Structural Damage": The solid black/grey walls disappeared or got colored over.
+     Visual Detection:
+     - Walls missing, recolored, or broken
+     - Exterior boundaries no longer continuous
+     - Plan readability reduced
      -> Generate Insight with System Instruction:
      "CMD: RESTORE_STRUCTURE. MASK_WALLS: TRUE. COLOR: BLACK. PRIORITY: STRUCTURAL_LINES."
 
@@ -96,8 +127,14 @@ export const buildUpdateInsightsPrompt = (editDescription: string): string => {
      "CMD: ALIGN_OBJECTS. AXIS: VERTICAL/HORIZONTAL. SNAP_TO: GRID."
 
   --- SUCCESS SCENARIOS ---
-  - Suggest next steps (e.g., "Now add a rug", "Change the lighting").
+  If no failure detected:
+  - Insight 1: Confirm what worked (specific success observation)
+  - Insight 2: Optional enhancement (style, lighting, furniture)
+  - Insight 3: Optional optimization (layout, proportions, flow)
+  - Insight 4: Optional advanced suggestion (structural modification, advanced styling)
 
-  OUTPUT: 4 Insights (mix of QA Critique and Next Steps).
+  OUTPUT: UP TO 4 Insights (mix of QA Critique and Next Steps).
+  If fewer than 4 meaningful insights exist, return fewer.
+  Do NOT invent issues or generic suggestions to reach a number.
   `;
 };

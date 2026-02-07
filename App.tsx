@@ -5,6 +5,7 @@ import { usePinManagement } from './hooks/usePinManagement';
 import { useImageUpload } from './hooks/useImageUpload';
 import { useGeminiAgent } from './hooks/useGeminiAgent';
 import { useSuggestions } from './hooks/useSuggestions';
+import { useProactiveLearning } from './hooks/useProactiveLearning';
 import { generateMultiAngleRender } from './services/gemini/renderingService';
 import { cropBase64Image, generateBinaryMask } from './utils/imageProcessing';
 import { Canvas } from './components/canvas/Canvas';
@@ -16,6 +17,7 @@ import { EditFeedback } from './components/feedback/EditFeedback';
 import { IdentifiedObject } from './types/spatial.types';
 import { DesignSuggestion, IntentTranslation } from './types/ai.types';
 import { useLearningStore } from './store/learningStore';
+import { useSpatialStore } from './store/spatialStore';
 import {
   analyzeImageQuality,
   QualityAnalysis,
@@ -96,18 +98,37 @@ const App: React.FC = () => {
   const [visualizationViews, setVisualizationViews] = useState<string[]>([]);
   const [activeViewIndex, setActiveViewIndex] = useState(0);
 
+  // Helper function to get active base64 image
+  const getActiveBase64 = () => {
+    if (generatedImage) return generatedImage.split(',')[1];
+    if (imageUrl) return imageUrl.split(',')[1];
+    return null;
+  };
+
+  // Proactive Learning (shows suggestions based on learned patterns)
+  useProactiveLearning({
+    selectedObject,
+    roomType: roomAnalysis?.room_type || 'unknown',
+    addLog,
+  });
+
   useEffect(() => {
     const checkKey = async () => {
       try {
         if (window.aistudio) {
-          setApiKeySelected(await window.aistudio.hasSelectedApiKey());
+          try {
+            setApiKeySelected(await window.aistudio.hasSelectedApiKey());
+          } catch (e) {
+            console.warn('aistudio.hasSelectedApiKey() failed:', e);
+            setApiKeySelected(true); // Default to true if check fails
+          }
         } else {
           const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
           setApiKeySelected(!!apiKey || true);
         }
       } catch (e) {
         console.error('Error checking API key:', e);
-        setApiKeySelected(false);
+        setApiKeySelected(true); // Default to true to allow app to load
       } finally {
         setIsKeyChecking(false);
       }
@@ -195,20 +216,9 @@ const App: React.FC = () => {
       }
     };
     
-    // Use requestIdleCallback for truly non-blocking execution
-    // Falls back to setTimeout if not available
-    const idleCallback = window.requestIdleCallback 
-      ? window.requestIdleCallback(() => runBackgroundAnalysis(), { timeout: 2000 })
-      : setTimeout(() => runBackgroundAnalysis(), 2000);
-    
-    return () => {
-      if (window.requestIdleCallback && typeof idleCallback === 'number') {
-        window.cancelIdleCallback(idleCallback);
-      } else if (typeof idleCallback === 'number') {
-        clearTimeout(idleCallback);
-      }
-    };
-  }, [generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore, editHistory.length]);
+    // Run immediately (no delay) so data is ready when user clicks
+    runBackgroundAnalysis();
+  }, [imageUrl, generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore, editHistory.length]);
 
   useEffect(() => {
     // Clear analysis cache when version changes
@@ -218,7 +228,7 @@ const App: React.FC = () => {
     backgroundAssistantRef.current = false;
   }, [currentEditIndex]);
 
-  // Background Assistant: Run after initial upload and after every edit
+  // Background Assistant: Run immediately after initial upload and after every edit
   useEffect(() => {
     const activeBase64 = getActiveBase64();
     if (!activeBase64 || !roomAnalysis || scannedObjects.length === 0) return;
@@ -229,7 +239,7 @@ const App: React.FC = () => {
     // Skip if already generating or already running
     if (isGeneratingSuggestions || backgroundAssistantRef.current) return;
     
-    // Run assistant generation in background
+    // Run assistant generation immediately (no delay) so data is ready when user clicks
     const runBackgroundAssistant = async () => {
       if (backgroundAssistantRef.current) return; // Already running
       backgroundAssistantRef.current = true;
@@ -243,19 +253,7 @@ const App: React.FC = () => {
       }
     };
     
-    // Use requestIdleCallback for non-blocking execution
-    // Falls back to setTimeout if not available
-    const idleCallback = window.requestIdleCallback 
-      ? window.requestIdleCallback(() => runBackgroundAssistant(), { timeout: 3000 })
-      : setTimeout(() => runBackgroundAssistant(), 3000);
-    
-    return () => {
-      if (window.requestIdleCallback && typeof idleCallback === 'number') {
-        window.cancelIdleCallback(idleCallback);
-      } else if (typeof idleCallback === 'number') {
-        clearTimeout(idleCallback);
-      }
-    };
+    runBackgroundAssistant();
   }, [generatedImage, roomAnalysis, scannedObjects.length, isAssistantOpen, showAnalysis, isGeneratingSuggestions, generateIdeas]);
 
   const handleConnectKey = async () => {
@@ -291,12 +289,6 @@ const App: React.FC = () => {
     setShowEditFeedback(false);
     setLastEditDescription('');
     feedbackShownForRef.current.clear();
-  };
-
-  const getActiveBase64 = () => {
-    if (generatedImage) return generatedImage.split(',')[1];
-    if (imageUrl) return imageUrl.split(',')[1];
-    return null;
   };
 
   const handleImageClick = async (e: React.MouseEvent<HTMLDivElement>, rect: DOMRect) => {
@@ -354,6 +346,25 @@ const App: React.FC = () => {
       console.error('[handleSend] No text to send and no override data', { textOverride, userInput, textToSend });
       return;
     }
+
+    // **NEW: DETECT MULTI-OBJECT COMMANDS**
+    const multiObjectPattern = /remove.*(?:,|and).*(?:,|and)/i;
+    const isMultiObjectRemoval = multiObjectPattern.test(textToSend) && /remove/i.test(textToSend);
+    
+    if (isMultiObjectRemoval && !overrideData) {
+      addLog('⚠️ Multi-object removal detected. Please remove objects one at a time for precision.', 'error');
+      addLog('💡 Example: "Remove dish soap bottle" → then → "Remove blue strainer" → etc.', 'thought');
+      
+      // Extract first object mentioned
+      const firstObjectMatch = textToSend.match(/remove\s+(?:the\s+)?([^,]+?)(?:\s+from|\s+,|$)/i);
+      if (firstObjectMatch) {
+        const firstObject = firstObjectMatch[1].trim();
+        addLog(`💡 Try this first: "Remove ${firstObject}"`, 'thought');
+        setUserInput(`Remove ${firstObject}`);
+      }
+      
+      return; // Don't execute multi-object command
+    }
     
     // Capture reference before cleanup
     const refBase64 = referenceImage ? referenceImage.split(',')[1] : undefined;
@@ -391,29 +402,47 @@ const App: React.FC = () => {
   const handleApplySuggestion = (suggestion: DesignSuggestion) => {
     const activeBase64 = getActiveBase64();
     if (!activeBase64) return;
-    
+
     const prompt = suggestion.suggested_prompt?.trim();
     if (!prompt) {
       addLog(`⚠️ Suggestion prompt is empty.`, 'error');
       return;
     }
-    
-    learningStore.recordLike(suggestion, roomAnalysis?.room_type || 'unknown');
-    
-    removeSuggestion(suggestion.id);
-    
-    setIsAssistantOpen(false);
-    
-    addLog(`✨ Applying idea: ${suggestion.title}`, 'action');
-    
-    // Auto-select target if possible
-    if (suggestion.target_object_name) {
-       const target = scannedObjects.find(o => o.name.toLowerCase() === suggestion.target_object_name.toLowerCase());
-       if (target) setSelectedObject(target);
+
+    // CRITICAL FIX: Verify target object exists before applying
+    if (suggestion.target_object_name && suggestion.target_object_name !== 'Room' && suggestion.target_object_name !== 'entire space') {
+      const targetExists = scannedObjects.find(obj => 
+        obj.name.toLowerCase().includes(suggestion.target_object_name.toLowerCase()) ||
+        suggestion.target_object_name.toLowerCase().includes(obj.name.toLowerCase())
+      );
+      
+      if (!targetExists) {
+        addLog(`⚠️ Cannot apply suggestion: "${suggestion.target_object_name}" not found in current scene. AI hallucinated this object.`, 'error');
+        addLog(`Available objects: ${scannedObjects.map(o => o.name).join(', ')}`, 'thought');
+        
+        // Record as hallucination for learning
+        learningStore.recordFailure(
+          suggestion.suggested_prompt,
+          'hallucination',
+          roomAnalysis?.room_type || 'unknown'
+        );
+        
+        removeSuggestion(suggestion.id);
+        return;
+      }
+      
+      // Object exists - select it and apply
+      setSelectedObject(targetExists);
+      addLog(`✓ Found target: ${targetExists.name}`, 'thought');
     }
-    
+
+    learningStore.recordLike(suggestion, roomAnalysis?.room_type || 'unknown');
+    removeSuggestion(suggestion.id);
+    setIsAssistantOpen(false);
+    addLog(`✨ Applying idea: ${suggestion.title}`, 'action');
+
     setTimeout(() => {
-        handleSend(undefined, prompt);
+      handleSend(undefined, prompt);
     }, 100);
   };
 
@@ -790,7 +819,6 @@ const App: React.FC = () => {
            interpreted_intent: `Quick Remove: ${object.name}`,
            proposed_action: `Remove the ${object.name} completely. Inpaint the background to match surroundings.`,
            spatial_check_required: false,
-           imagen_prompt: `Remove ${object.name}`,
            active_subject_name: object.name
         };
         handleSend({ forceAction: removeTranslation, forceObject: object });
@@ -898,6 +926,9 @@ const App: React.FC = () => {
             isRenderedView={visualizationViews.length > 0}
             // 2D Plan Flag
             isPlan={roomAnalysis?.is_2d_plan || false}
+            // For smart quick actions
+            qualityAnalysis={qualityAnalysis}
+            learningStore={learningStore}
           />
 
           {/* Design Assistant Panel */}

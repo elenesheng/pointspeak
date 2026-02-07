@@ -4,8 +4,9 @@ import { getApiKey } from '../../utils/apiUtils';
 import { convertToPNG, normalizeBase64 } from '../../utils/imageProcessing';
 import { IdentifiedObject } from '../../types/spatial.types';
 import { getPresetForOperation, IMAGE_SIZE_2K } from '../../config/modelConfigs';
-import { buildRenderingSystemPrompt, getRenderingInstruction } from '../../config/prompts/rendering/structure';
+import { buildRenderingSystemPrompt, getRenderingInstruction, buildStrictRenderingSystemPrompt } from '../../config/prompts/rendering/structure';
 import { getStage1StructurePrompt, buildStage2StylePrompt, buildStyleProjection } from '../../config/prompts/rendering/multi-stage';
+import { validateRenderingTopology } from './validationService';
 
 interface ContentPart {
   inlineData?: { mimeType: string; data: string };
@@ -43,7 +44,9 @@ export const generateMultiAngleRender = async (
   referenceBase64: string | null,
   styleDescription: string,
   detectedObjects?: IdentifiedObject[],
-  isAlreadyVisualized: boolean = false
+  isAlreadyVisualized: boolean = false,
+  retryMode: boolean = false,
+  previousImageBase64?: string
 ): Promise<string[]> => {
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
@@ -53,20 +56,35 @@ export const generateMultiAngleRender = async (
       ? `\n\nDetected objects:\n${detectedObjects.map((o) => `- ${o.name} (${o.category})`).join('\n')}`
       : '';
 
-  const systemPrompt = buildRenderingSystemPrompt({
-    styleDescription,
-    isAlreadyVisualized,
-    referenceBase64,
-    objectContext,
-  });
+  // Use correction-focused prompt for retry (with previous image as anchor)
+  const systemPrompt = retryMode
+    ? buildStrictRenderingSystemPrompt({
+        styleDescription,
+        isAlreadyVisualized,
+        referenceBase64,
+        objectContext,
+        detectedObjects,
+      }, previousImageBase64)
+    : buildRenderingSystemPrompt({
+        styleDescription,
+        isAlreadyVisualized,
+        referenceBase64,
+        objectContext,
+        detectedObjects,
+      });
 
   try {
-    // Image order: Blueprint first, Aesthetic second (if exists), Mask last (THE TRUTH), Instructions after
-    const parts: ContentPart[] = [
-      { inlineData: { mimeType: 'image/jpeg', data: planBase64 } }, // The Blueprint
-    ];
+    // Image order: Previous image (if retry), Blueprint, Reference (if exists), Mask last, Instructions after
+    const parts: ContentPart[] = [];
+    
+    // In retry mode, use previous image as visual anchor
+    if (retryMode && previousImageBase64) {
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: previousImageBase64 } }); // Previous image as anchor
+    }
+    
+    parts.push({ inlineData: { mimeType: 'image/jpeg', data: planBase64 } }); // The Blueprint
 
-    // Add reference image if provided (second position - The Aesthetic)
+    // Add reference image if provided (for style cues, even in retry)
     if (referenceBase64) {
       parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
     }
@@ -75,16 +93,21 @@ export const generateMultiAngleRender = async (
     parts.push({ inlineData: { mimeType: 'image/png', data: maskBase64 } });
 
     // Instructions last (most important for Gemini - reads mask right before this)
-    const instructionText = getRenderingInstruction(isAlreadyVisualized, referenceBase64);
+    const instructionText = getRenderingInstruction(isAlreadyVisualized, referenceBase64, retryMode);
 
     parts.push({ text: instructionText });
+
+    // Lower temperature for retry mode
+    const temperature = retryMode 
+      ? 0.1 
+      : getPresetForOperation('RENDER_SINGLE').temperature;
 
     const response = await ai.models.generateContent({
       model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
       contents: { parts },
       config: {
         systemInstruction: systemPrompt,
-        temperature: getPresetForOperation('RENDER_SINGLE').temperature,
+        temperature,
         imageConfig: { imageSize: IMAGE_SIZE_2K },
       },
     });
@@ -92,6 +115,39 @@ export const generateMultiAngleRender = async (
     const jpegImageBase64 = extractBase64(response);
     const jpegBase64 = normalizeBase64(jpegImageBase64);
     const pngBase64 = await convertToPNG(jpegBase64);
+    
+    // Validate topology (only for plan-based renders, not retries)
+    // Only retry on truly critical violations: new rooms or new openings
+    // Do NOT retry on minor shifts, wall thickness, or corner rounding
+    if (!isAlreadyVisualized && !retryMode) {
+      try {
+        const validation = await validateRenderingTopology(pngBase64, planBase64, maskBase64);
+        
+        // Only retry on CRITICAL violations: new openings or walls added/removed
+        // Do NOT retry on minor shifts, wall thickness variance, or corner rounding
+        if (validation.new_openings || (validation.wall_changes && validation.topology_changed)) {
+          console.log('[Render] Critical topology violation detected:', validation);
+          console.log('[Render] Retrying with previous image as anchor...');
+          
+          // Retry with previous image as anchor (add information, don't remove)
+          return generateMultiAngleRender(
+            planBase64,
+            maskBase64,
+            referenceBase64,
+            styleDescription,
+            detectedObjects,
+            isAlreadyVisualized,
+            true, // retryMode
+            jpegBase64 // Pass previous image as anchor
+          );
+        } else {
+          console.log('[Render] Topology validation passed - minor adjustments acceptable');
+        }
+      } catch (validationError) {
+        console.warn('[Render] Topology validation failed, but continuing with result:', validationError);
+      }
+    }
+    
     return [`data:image/png;base64,${pngBase64}`];
   } catch (e) {
     console.error('Render failed', e);
@@ -129,7 +185,9 @@ export const generateMultiStageRender = async (
   referenceBase64: string | null,
   styleDescription: string,
   detectedObjects?: IdentifiedObject[],
-  isAlreadyVisualized: boolean = false
+  isAlreadyVisualized: boolean = false,
+  retryMode: boolean = false,
+  previousImageBase64?: string
 ): Promise<string[]> => {
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
@@ -142,20 +200,30 @@ export const generateMultiStageRender = async (
   // STAGE 1: Architectural White Model (Wireframe/Clay Hybrid)
   const structurePrompt = getStage1StructurePrompt();
 
-  // Image order: Blueprint first, Mask last (THE TRUTH), Instructions after
-  const stage1Parts: ContentPart[] = [
+  // Image order: Previous image (if retry), Blueprint, Mask last (THE TRUTH), Instructions after
+  const stage1Parts: ContentPart[] = [];
+  
+  // In retry mode, use previous image as visual anchor
+  if (retryMode && previousImageBase64) {
+    stage1Parts.push({ inlineData: { mimeType: 'image/jpeg', data: previousImageBase64 } }); // Previous image as anchor
+  }
+  
+  stage1Parts.push(
     { inlineData: { mimeType: 'image/jpeg', data: planBase64 } }, // The Blueprint
     { inlineData: { mimeType: 'image/png', data: maskBase64 } }, // THE TRUTH (Last image before instructions)
-    { text: structurePrompt }, // The Rules
-  ];
+    { text: structurePrompt } // The Rules
+  );
 
   console.log('[Render] Stage 1: Generating perspective structure...');
+  
+  // Lower temperature for retry mode
+  const stage1Temperature = retryMode ? 0.1 : getPresetForOperation('RENDER_STRUCTURE').temperature;
   
   const stage1Response = await ai.models.generateContent({
     model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
     contents: { parts: stage1Parts },
       config: {
-        temperature: getPresetForOperation('RENDER_STRUCTURE').temperature,
+        temperature: stage1Temperature,
         imageConfig: { imageSize: IMAGE_SIZE_2K },
       },
   });
@@ -163,13 +231,50 @@ export const generateMultiStageRender = async (
   const stage1Image = extractBase64(stage1Response);
   const stage1Base64 = normalizeBase64(stage1Image);
 
-  // STAGE 2: Apply Style
+  // STAGE 2: Apply Style (in retry mode, use previous image as anchor)
+  if (retryMode && previousImageBase64) {
+    console.log('[Render] Retry mode: Using previous image as anchor for corrections');
+    // Use previous image as first input to preserve what's correct
+    const stage2Parts: ContentPart[] = [
+      { inlineData: { mimeType: 'image/jpeg', data: previousImageBase64 } }, // Previous image as anchor
+      { inlineData: { mimeType: 'image/jpeg', data: stage1Base64 } }, // Corrected structure
+    ];
+    
+    if (referenceBase64) {
+      stage2Parts.push({ inlineData: { mimeType: 'image/jpeg', data: referenceBase64 } });
+    }
+    
+    const correctionPrompt = `CORRECTION MODE: The first image shows the previous result. The second image shows the corrected structure.
+- Preserve what is correct in the first image (perspective, camera angle, spatial relationships)
+- Apply corrections from the second image (fixed topology, corrected openings)
+- Maintain visual coherence and photographic quality
+- Only correct the detected issues, do not re-imagine the entire scene`;
+    
+    stage2Parts.push({ text: correctionPrompt });
+    
+    const stage2Response = await ai.models.generateContent({
+      model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
+      contents: { parts: stage2Parts },
+      config: {
+        temperature: 0.15, // Lower temperature for corrections
+        imageConfig: { imageSize: IMAGE_SIZE_2K },
+      },
+    });
+    
+    const finalImage = extractBase64(stage2Response);
+    const finalBase64 = normalizeBase64(finalImage);
+    const pngBase64 = await convertToPNG(finalBase64);
+    return [`data:image/png;base64,${pngBase64}`];
+  }
+
   console.log('[Render] Stage 2: Applying style and details...');
   
   const stylePrompt = buildStage2StylePrompt({
     styleDescription,
     objectContext,
     referenceBase64,
+    detectedObjects,
+    isAlreadyVisualized,
   });
 
   // Image order: Stage 1 result first, reference second (if exists), instructions last
@@ -195,6 +300,39 @@ export const generateMultiStageRender = async (
   const finalImage = extractBase64(stage2Response);
   const finalBase64 = normalizeBase64(finalImage);
   const pngBase64 = await convertToPNG(finalBase64);
+  
+  // Validate topology (only for plan-based renders, not retries)
+  // Only retry on truly critical violations: new rooms or new openings
+  // Do NOT retry on minor shifts, wall thickness, or corner rounding
+  if (!isAlreadyVisualized) {
+    try {
+      const validation = await validateRenderingTopology(pngBase64, planBase64, maskBase64);
+      
+      // Only retry on CRITICAL violations: new openings or walls added/removed
+      // Do NOT retry on minor shifts, wall thickness variance, or corner rounding
+      if (validation.new_openings || (validation.wall_changes && validation.topology_changed)) {
+        console.log('[Render] Critical topology violation detected:', validation);
+        console.log('[Render] Retrying with previous image as anchor...');
+        
+        // Retry with previous image as anchor (add information, don't remove)
+        return generateMultiStageRender(
+          planBase64,
+          maskBase64,
+          referenceBase64,
+          styleDescription,
+          detectedObjects,
+          isAlreadyVisualized,
+          true, // retryMode
+          stage1Base64 // Pass stage 1 result as anchor
+        );
+      } else {
+        console.log('[Render] Topology validation passed - minor adjustments acceptable');
+      }
+    } catch (validationError) {
+      console.warn('[Render] Topology validation failed, but continuing with result:', validationError);
+    }
+  }
+  
   return [`data:image/png;base64,${pngBase64}`];
 };
 

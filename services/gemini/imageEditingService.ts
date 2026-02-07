@@ -80,19 +80,24 @@ const buildMaterialsPassPrompt = (
 
   const colorList = stylePlan.reference_analysis.color_palette.map((c, i) => `- ${c}`).join('\n');
 
-  return `PASS 1: Apply materials from Image 1 to Image 2.
+  return `OUTPUT RULE (CRITICAL):
+- The output MUST be a modification of the FIRST image provided
+- NEVER output the second image or a re-creation of it
+- If the second image already satisfies the request, you must still modify the first image instead
 
-Keep the SECOND image's camera and layout exactly as shown.
+PASS 1: Apply materials from the second image to the first image.
+
+Keep the FIRST image's camera and layout exactly as shown.
 Only change materials - not furniture, decor, or structural elements.
 
-USE ONLY THESE COLORS FROM IMAGE 1:
+USE ONLY THESE COLORS FROM THE SECOND IMAGE:
 ${colorList}
 
 MATERIALS TO APPLY:
 ${surfaceList}
 
-Copy these materials to the specified surfaces. Use only the colors listed above.
-The SECOND image is the current room - preserve its camera and all structural elements exactly.`;
+Apply these materials to the FIRST image's surfaces. Use only the colors listed above.
+Return the FIRST image modified.`;
 };
 
 /**
@@ -108,18 +113,23 @@ const buildFurniturePassPrompt = (
   const replaceList = toReplace.map(f => `- REPLACE: ${f}`).join('\n');
   const furnitureStyles = stylePlan.reference_analysis.furniture_styles.join(', ');
 
-  return `PASS 2: Copy furniture from Image 1 to Image 2.
+  return `OUTPUT RULE (CRITICAL):
+- The output MUST be a modification of the FIRST image provided
+- NEVER output the second image or a re-creation of it
+- If the second image already satisfies the request, you must still modify the first image instead
 
-Keep the SECOND image's camera and layout exactly as shown.
+PASS 2: Apply furniture style from the second image to the first image.
+
+Keep the FIRST image's camera and layout exactly as shown.
 Preserve materials from Pass 1.
 Don't block paths or plumbing.
 
-FURNITURE FROM IMAGE 1:
+FURNITURE FROM THE SECOND IMAGE:
 ${addList ? `ADD:\n${addList}\n` : ''}
 ${replaceList ? `REPLACE:\n${replaceList}\n` : ''}
 
-Copy these furniture items from Image 1. Use the exact colors and styles shown in Image 1.
-The SECOND image is the current room.`;
+Apply these furniture styles to the FIRST image. Use colors and styles inspired by the second image.
+Return the FIRST image modified.`;
 };
 
 /**
@@ -132,45 +142,34 @@ const buildDecorPassPrompt = (
   const lightingChar = stylePlan.reference_analysis.lighting_characteristics;
   const aesthetic = stylePlan.reference_analysis.overall_aesthetic;
 
-  return `PASS 3: Add decor and refine lighting in Image 2.
+  return `OUTPUT RULE (CRITICAL):
+- The output MUST be a modification of the FIRST image provided
+- NEVER output the second image or a re-creation of it
+- If the second image already satisfies the request, you must still modify the first image instead
 
-HARD CONSTRAINT (NON-NEGOTIABLE):
-- The output image MUST be a modification of Image 2
-- Image 1 may NEVER be returned as-is
-- Preserve all walls, windows, doors, and major furniture silhouettes from Image 2
-- If Image 2 and Image 1 differ in geometry, Image 2 ALWAYS wins
-- At least 50% of pixels must remain identical to Image 2 outside decor objects
+PASS 3: Add decor and refine lighting in the first image.
 
-CONSTRAINTS:
-- This must remain the SAME room as Image 2
-- Preserve camera, perspective, and layout from Image 2 exactly
-- Preserve materials and furniture from previous passes
+Preserve all walls, windows, doors from the FIRST image.
+Preserve camera, perspective, and layout from the FIRST image exactly.
+Preserve materials and furniture from previous passes.
 
-REFERENCE IMAGE USAGE:
-- Use Image 1 ONLY as a design catalog for decor styles and lighting characteristics
-- DO NOT recreate the reference photograph
-- DO NOT copy reference framing, composition, or exposure
-
-DECOR (COPY DESIGN ONLY):
-- Add decorative elements inspired by Image 1:
+DECOR:
+- Add decorative elements inspired by the second image:
   * artwork
   * plants
   * rugs
   * accessories
-- Match the design, colors, and styles shown in Image 1
-- Adapt size and placement to fit Image 2 naturally
+- Match colors and styles from the second image
+- Adapt to fit the FIRST image naturally
 
-LIGHTING (ADAPT, DO NOT COPY):
-- Target lighting characteristics: ${lightingChar}
-- Adjust brightness, warmth, and fixture style to match the reference
-- Preserve Image 2's light direction, shadow structure, and exposure
-- Lighting must look physically consistent with Image 2's geometry
+LIGHTING:
+- Target: ${lightingChar}
+- Adjust brightness and warmth to match the second image
+- Preserve the FIRST image's light direction and shadows
 
-AESTHETIC:
-- Overall aesthetic target: ${aesthetic}
-- Achieve this through decor and lighting refinement, not scene replacement
+AESTHETIC: ${aesthetic}
 
-The SECOND image is the current room.`;
+Return the FIRST image modified.`;
 };
 
 
@@ -202,9 +201,10 @@ ${SCALE_NORMALIZATION_RULE}
 
 ${SPATIAL_AWARENESS_CONSTRAINTS}`;
 
+  // CRITICAL: Current image FIRST (base), reference SECOND (style source)
   const parts = [
-    { inlineData: { mimeType: MIME_TYPE_JPEG, data: referenceJpeg } },
     { inlineData: { mimeType: MIME_TYPE_JPEG, data: currentJpeg } },
+    { inlineData: { mimeType: MIME_TYPE_JPEG, data: referenceJpeg } },
     { text: fullPrompt },
   ];
 
@@ -479,6 +479,7 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
                          GLOBAL_STYLE_KEYWORDS.test(translation.proposed_action);
     const hasReferenceImage = !!referenceImageBase64 && !isOriginalImageReference;
     
+    
     let stylePlan: GlobalStylePlan | undefined;
     if (isGlobalStyle && hasReferenceImage) {
       console.log('[ImageEdit] Performing reasoning-based analysis for global style edit...');
@@ -492,19 +493,8 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
         );
         console.log('[ImageEdit] Reasoning analysis complete');
         
-        // Route to multi-pass orchestration if enabled
-        if (GEMINI_CONFIG.FLAGS.ENABLE_MULTI_PASS_GLOBAL_STYLE && stylePlan) {
-          console.log('[ImageEdit] Using multi-pass orchestration for global style');
-          return performMultiPassGlobalStyle(
-            currentImageBase64,
-            stylePlan,
-            referenceImageBase64,
-            preferredModelId,
-            onPassUpdate
-          );
-        }
-        
-        console.log('[ImageEdit] Using single-pass with plan for style application');
+        // Use single-pass for global style (3-pass disabled - simpler and more reliable)
+        console.log('[ImageEdit] Using single-pass for global style application');
       } catch (analysisError) {
         console.warn('[ImageEdit] Reasoning analysis failed, proceeding without plan:', analysisError);
         // Continue without plan - prompt will still work
@@ -536,10 +526,10 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
     // Wait for all conversions in parallel
     const convertedImages = await Promise.all(conversionPromises);
     
-    // Reference image comes first (Gemini processes it as style target)
+    // Current image FIRST (base), reference SECOND (style guide)
     if (referenceImageBase64 && !isOriginalImageReference) {
-      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[0] } });
-      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[1] } });
+      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[1] } }); // CURRENT
+      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[0] } }); // REFERENCE
     } else {
       parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[0] } });
     }

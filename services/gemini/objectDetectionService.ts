@@ -59,7 +59,7 @@ export const scanImageForObjects = async (
 
   return withSmartRetry(async () => {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
-    const model = 'gemini-2.5-flash';
+    const model = 'gemini-3-flash-preview';
 
     const prompt = `Detect all objects and spaces in this image. Return a JSON array.
 

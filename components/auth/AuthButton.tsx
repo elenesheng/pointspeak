@@ -20,7 +20,7 @@ export const AuthButton: React.FC = () => {
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/30 border border-emerald-700/50 rounded-lg text-xs text-emerald-400">
           <CheckCircle className="w-3 h-3" />
-          Imagen Ready
+          Signed In
         </div>
         <button
           onClick={() => signOut()}
@@ -39,7 +39,7 @@ export const AuthButton: React.FC = () => {
       className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs text-white font-medium transition-colors"
     >
       <LogIn className="w-3.5 h-3.5" />
-      Sign in for Imagen
+      Sign In
     </button>
   );
 };

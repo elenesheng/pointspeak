@@ -9,7 +9,7 @@ import { buildMoveAction, MovePromptParams } from './move';
 import { buildInternalModifyAction, InternalModifyPromptParams } from './internal';
 import { buildAlignmentAction, AlignmentPromptParams } from './alignment';
 import { buildDefaultAction, DefaultEditPromptParams } from './default';
-import { DIMENSION_CONSTRAINT, GROUNDING, PRESERVATION_BASIC, SPATIAL_AWARENESS_CONSTRAINTS, LAYOUT_PRESERVATION_CRITICAL, ROOM_IDENTITY_LOCK, PROHIBITED_BEHAVIOR } from '../templates/base';
+import { DIMENSION_CONSTRAINT, GROUNDING, PRESERVATION_BASIC, SPATIAL_AWARENESS_CONSTRAINTS, LAYOUT_PRESERVATION_CRITICAL, ROOM_IDENTITY_LOCK, PROHIBITED_BEHAVIOR, CAMERA_LOCK_RULE } from '../templates/base';
 import { REFERENCE_GUIDANCE_GLOBAL, REFERENCE_GUIDANCE_OBJECT, REFERENCE_GUIDANCE_TEXT, QUALITY_REFERENCE } from '../templates/fragments';
 
 export interface EditingPromptParams {
@@ -140,9 +140,10 @@ Do not generalize or approximate - match the specifications precisely.`;
   const sections: string[] = [];
   
   if (isGlobalStyle && referenceImageBase64) {
-    // Global style: Minimal constraints to avoid conflict
+    // Global style: Camera lock FIRST, then style instructions
     sections.push(
       GROUNDING,
+      CAMERA_LOCK_RULE, // CRITICAL: Lock camera BEFORE style instructions
       ROOM_IDENTITY_LOCK, // Single unified constraint block
       sceneInventory,
       context,

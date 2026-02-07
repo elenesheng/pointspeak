@@ -12,7 +12,7 @@ export default function SignIn() {
       
       <h1 className="text-3xl font-bold text-slate-100 mb-2">SpaceVision</h1>
       <p className="text-slate-400 mb-8 text-center max-w-md">
-        Sign in with Google to enable AI-powered image editing with Vertex AI Imagen
+        Sign in with Google to enable AI-powered image editing
       </p>
       
       <button

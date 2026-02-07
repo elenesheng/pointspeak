@@ -146,14 +146,15 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
   }, [versionOrder, versions]);
 
   const cancelOperation = useCallback(() => {
-    if (!isProcessing) return;
+    // Always allow cancellation - don't check isProcessing
+    // This ensures cancellation works even during long-running API calls
     operationIdRef.current += 1;
     setIsProcessing(false);
-    setStatus('Idle');
+    setStatus('Ready');
     setEstimatedTime(0);
     if (timerRef.current) clearInterval(timerRef.current);
     addLog('Operation cancelled by user.', 'action');
-  }, [isProcessing, addLog]);
+  }, [addLog]);
 
   // 1. Initial Room Scan + Object Detection
   const performInitialScan = async (base64: string, addToHistory: boolean = false) => {
@@ -174,14 +175,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         scanImageForObjects(jpegBase64)
       ]);
       
-      const timeoutPromise = new Promise<[Awaited<ReturnType<typeof analyzeRoomSpace>>, Awaited<ReturnType<typeof scanImageForObjects>>]>((_, reject) => {
-        setTimeout(() => reject(new Error('Scan timeout after 60 seconds')), 60000);
-      });
-      
-      const [analysis, objects] = await Promise.race([
-        scanPromise,
-        timeoutPromise
-      ]);
+      // No timeout - let scanning complete naturally
+      const [analysis, objects] = await scanPromise;
 
       if (currentOpId !== operationIdRef.current) {
         setStatus('Ready');
@@ -340,14 +335,14 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     const initialSnapshot = store.getCurrentSnapshot();
     if (!initialSnapshot) {
       addLog("No active image to edit. Please upload a photo.", 'error');
-      return;
+      return undefined;
     }
     
     // Get roomAnalysis from initial snapshot (this doesn't change between edits)
     const latestRoomAnalysis = initialSnapshot.roomAnalysis;
     if (!latestRoomAnalysis) {
       addLog("No active image to edit. Please upload a photo.", 'error');
-      return;
+      return undefined;
     }
 
     const refImageToUse = referenceImageBase64 || activeRefImage;
@@ -418,7 +413,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         const reasoningSnapshot = store.getCurrentSnapshot();
         if (!reasoningSnapshot) {
           addLog("No active image to edit. Please upload a photo.", 'error');
-          return;
+          return undefined;
         }
         const reasoningImage = inputBase64 || reasoningSnapshot.base64;
         
@@ -434,9 +429,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           refDescToUse || undefined
         );
         
-        if (currentOpId !== operationIdRef.current) return;
+        if (currentOpId !== operationIdRef.current) return undefined;
 
-        if (translation.validation && !translation.validation.valid) {
+        if (translation.validation && !translation.validation.valid && !forceOverride) {
              addLog('⚠️ SPATIAL WARNING: ' + translation.validation.warnings.join(', '), 'validation', {
                  ...translation.validation,
                  canForce: true,
@@ -447,7 +442,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
              setStatus('Ready');
              if (timerRef.current) clearInterval(timerRef.current);
              setEstimatedTime(0);
-             return; 
+             return undefined; 
+        }
+        
+        // If forceOverride is true and validation failed, log but continue
+        if (translation.validation && !translation.validation.valid && forceOverride) {
+          addLog('⚠️ SPATIAL WARNING (forced): ' + translation.validation.warnings.join(', '), 'thought');
         }
         addLog(translation.interpreted_intent, 'intent', translation);
       }
@@ -464,10 +464,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         ? state.versions[state.versionOrder[0]]?.base64 || null
         : null;
       
-      // Check if this is a global style edit
-      const isGlobalStyleEdit = effectiveSelectedObject.id === 'global_room_context' || 
+      // Check if this is a global style edit - ONLY when NO object is selected
+      // If an object is selected, we already have reference and don't need 3-pass global
+      const isGlobalStyleEdit = !selectedObject && (
+                                effectiveSelectedObject.id === 'global_room_context' || 
                                 !effectiveSelectedObject.box_2d ||
-                                /room|whole|entire|global|all|redesign/i.test(translation.proposed_action);
+                                /room|whole|entire|global|all|redesign/i.test(translation.proposed_action));
       const hasReferenceForGlobal = isGlobalStyleEdit && refImageToUse;
       
       // For global style: ONLY reference image, no original
@@ -485,7 +487,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
 
       // Status callback for multi-pass updates
       const onPassUpdate = hasReferenceForGlobal ? (passNumber: number, passName: string, currentImage: string) => {
-        if (currentOpId !== operationIdRef.current) return; // Cancel if operation changed
+        if (currentOpId !== operationIdRef.current) return undefined; // Cancel if operation changed
         
         // Update status to show current phase
         setStatus(`${passName}...` as AppStatus);
@@ -502,34 +504,54 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       // CRITICAL: Read latest snapshot IMMEDIATELY before editing - this is the stone-hard versioning logic
       // This ensures we ALWAYS edit the most recent version, even if another edit completed during async work
       // DO NOT use any cached image - always read fresh from store right before editing
-      const editSnapshot = store.getCurrentSnapshot();
-      if (!editSnapshot) {
+      // Re-read store state to ensure we have the absolute latest current version
+      const storeState = useSpatialStore.getState();
+      const currentVersion = storeState.currentVersionId 
+        ? storeState.versions[storeState.currentVersionId]
+        : null;
+      if (!currentVersion) {
         addLog("No active image to edit. Please upload a photo.", 'error');
-        return;
+        return undefined;
       }
-      const editImageBase64 = inputBase64 || editSnapshot.base64;
+      const editImageBase64 = inputBase64 || currentVersion.base64;
       
       // Log which version we're editing for debugging
-      const storeState = useSpatialStore.getState();
-      const editVersionIndex = storeState.versionOrder.indexOf(editSnapshot.id);
-      console.log(`[Versioning] Editing version ${editVersionIndex} (ID: ${editSnapshot.id})`);
+      const editVersionIndex = storeState.versionOrder.indexOf(currentVersion.id);
+      console.log(`[Versioning] Editing version ${editVersionIndex} (ID: ${currentVersion.id}, Current: ${storeState.currentVersionId})`);
       
-      const editedImageBase64 = await performImageEdit(
-        editImageBase64,
-        translation, 
-        effectiveSelectedObject, 
-        latestRoomAnalysis, 
-        activeModel, 
-        targetObject,
-        refDescToUse || undefined,
-        qualityReferenceImage || null,
-        isUsingOriginalAsReference, // Pass flag to indicate original image reference
-        scannedObjects, // Pass all detected objects for scene context
-        learningContext, // Pass learning context for AI behavior adjustment
-        onPassUpdate // Pass status callback for multi-pass updates
-      );
+      let editedImageBase64: string;
+      try {
+        editedImageBase64 = await performImageEdit(
+          editImageBase64,
+          translation, 
+          effectiveSelectedObject, 
+          latestRoomAnalysis, 
+          activeModel, 
+          targetObject,
+          refDescToUse || undefined,
+          qualityReferenceImage || null,
+          isUsingOriginalAsReference, // Pass flag to indicate original image reference
+          scannedObjects, // Pass all detected objects for scene context
+          learningContext, // Pass learning context for AI behavior adjustment
+          onPassUpdate // Pass status callback for multi-pass updates
+        );
+        
+        if (!editedImageBase64) {
+          console.error('[executeCommand] performImageEdit returned undefined or empty string');
+          addLog('Image edit failed: No result returned from image editing service', 'error');
+          setIsProcessing(false);
+          setStatus('Ready');
+          if (timerRef.current) clearInterval(timerRef.current);
+          setEstimatedTime(0);
+          return undefined;
+        }
+      } catch (editError) {
+        console.error('[executeCommand] performImageEdit threw error:', editError);
+        // Re-throw to be caught by outer catch block
+        throw editError;
+      }
       
-      if (currentOpId !== operationIdRef.current) return;
+      if (currentOpId !== operationIdRef.current) return undefined;
 
       const pureBase64 = editedImageBase64.startsWith('data:') ? editedImageBase64.split(',')[1] : editedImageBase64;
       
@@ -557,7 +579,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         scanImageForObjects(jpegPureBase64, true) // Fast mode enabled
       ]).then(([newInsights, newObjectsFull]) => {
         // Only update if operation hasn't been cancelled
-        if (currentOpId !== operationIdRef.current) return;
+        if (currentOpId !== operationIdRef.current) return undefined;
         
         // Update current version with new objects and insights
         if (newObjectsFull && newObjectsFull.length > 0) {
@@ -581,8 +603,10 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       return pureBase64;
 
     } catch (err) {
-      if (currentOpId !== operationIdRef.current) return;
+      if (currentOpId !== operationIdRef.current) return undefined;
       const appErr = mapApiError(err);
+      
+      console.error('[executeCommand] Error during execution:', err);
       
       // Record failure for learning (translation might not be defined if error occurred before parsing)
       const failedAction = translation?.interpreted_intent || userText || 'Unknown action';

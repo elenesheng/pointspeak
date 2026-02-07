@@ -1,4 +1,5 @@
-import { VERTEX_CONFIG } from '../config/vertex.config';
+// Default mask dilation percentage (2%)
+const DEFAULT_MASK_DILATION = 0.02;
 
 /**
  * Pixel coordinates derived from normalized box_2d.
@@ -35,7 +36,7 @@ export const dilatePixelBox = (
   box: PixelBox,
   imageWidth: number,
   imageHeight: number,
-  dilationPercent: number = VERTEX_CONFIG.defaults.maskDilation
+  dilationPercent: number = DEFAULT_MASK_DILATION
 ): PixelBox => {
   const dilatePixels = Math.round(Math.max(imageWidth, imageHeight) * dilationPercent);
 
@@ -48,7 +49,7 @@ export const dilatePixelBox = (
 };
 
 /**
- * Generates a binary mask image for Imagen inpainting from a bounding box.
+ * Generates a binary mask image from a bounding box.
  * White (255,255,255) = area to edit
  * Black (0,0,0) = area to preserve
  *
@@ -60,7 +61,7 @@ export const dilatePixelBox = (
 export const generateMaskFromBoundingBox = async (
   baseImageBase64: string,
   box_2d: [number, number, number, number],
-  dilationPercent: number = VERTEX_CONFIG.defaults.maskDilation
+  dilationPercent: number = DEFAULT_MASK_DILATION
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -119,7 +120,7 @@ export const generateMaskFromBoundingBox = async (
 export const generateCombinedMask = async (
   baseImageBase64: string,
   boxes: [number, number, number, number][],
-  dilationPercent: number = VERTEX_CONFIG.defaults.maskDilation
+  dilationPercent: number = DEFAULT_MASK_DILATION
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -177,7 +178,7 @@ export const generateMaskAtPosition = async (
   baseImageBase64: string,
   sourceBox: [number, number, number, number],
   targetPosition: { x: number; y: number }, // Normalized 0-1000 coordinates
-  dilationPercent: number = VERTEX_CONFIG.defaults.maskDilation
+  dilationPercent: number = DEFAULT_MASK_DILATION
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
     const img = new Image();

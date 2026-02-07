@@ -6,97 +6,147 @@ export interface MultiStagePromptParams {
   styleDescription: string;
   objectContext: string;
   referenceBase64: string | null;
+  detectedObjects?: Array<{ name: string; category?: string }>;
+  isAlreadyVisualized?: boolean;
 }
 
-export const buildStyleProjection = (styleDescription: string): string => {
-  return `STYLE TRANSLATION FOR ROOM APPLICATION:
-
-Use the reference style as a MATERIAL LANGUAGE, not a literal object.
-
-Interpret the style as follows:
-- Apply similar material qualities (texture, finish, color tone) to appropriate room surfaces
-- Upholstered textures → soft fabrics (sofas, chairs, cushions)
-- Color palette → walls, accents, decor
-- Finish qualities → cabinetry, furniture surfaces
-
-Do NOT replicate the reference object itself.
-Do NOT introduce new furniture, doors, or windows.
-
-Style Description: ${styleDescription}`;
+export const buildStyleProjection = (styleDescription: string, referenceBase64: string | null): string => {
+  const refRule = referenceBase64
+    ? `- Reference image: Use ONLY for materials, colors, lighting mood
+- Do NOT copy layout, camera, or architectural elements from reference`
+    : '';
+  
+  return `STYLE APPLICATION:
+${refRule}
+- Style Description: ${styleDescription}`;
 };
 
 export const getStage1StructurePrompt = (): string => {
-  return `Generate an 'ARCHITECTURAL WHITE MODEL' (Clay Render).
+  return `STAGE 1 — STRUCTURAL PROJECTION (NON-CREATIVE)
 
-TASK: Define the 'Structural Shell' - establish correct 3D PERSPECTIVE geometry and spatial structure.
+You are NOT designing or generating a new room.
+You are PROJECTING an EXISTING room into a white clay model.
 
-CRITICAL: This is a 3D PERSPECTIVE render, NOT a 2D map. You are a photographer standing INSIDE the room.
+SPATIAL AUTHORITY (ABSOLUTE):
+- The Structural Mask defines EXACT wall positions
+- The Floor Plan defines EXACT openings (doors/windows)
+- Do NOT normalize, correct, improve, or redesign proportions
+- Do NOT invent walls, doors, windows, or room extensions
+- If geometry is awkward or asymmetrical, PRESERVE IT
+- Every corner in the 2D map must map to a corner in the 3D view
+- No smoothing, no straightening, no symmetry fixes
 
-PERSPECTIVE GEOMETRY (3D VIEW):
-- Camera at human eye level (1.6m) at room entrance
-- You are standing INSIDE the room, looking STRAIGHT forward
-- 2-point linear perspective with horizon line at center (50% from top)
-- Zero-Tilt: All vertical lines (walls, door frames) perfectly parallel to image edges
-- Floor at bottom receding, ceiling at top receding, walls on sides converging
-- Vanishing points on the horizon line
+CAMERA (LOCKED):
+- Single fixed camera
+- Eye level: 1.6m
+- Standing INSIDE the room
+- Looking straight forward
+- 2-point perspective
+- Horizon line exactly at 50% height
+- Zero vertical tilt (all verticals parallel to image edges)
+- Do NOT change camera after placement
 - Do NOT output a top-down, aerial, or bird's-eye view
 
-3D EXTRUSION:
-- EXTRUDE the white lines from the Structural Mask into 3D walls
-- Every line from the 2D floor plan must be extruded vertically into 3D space
-- The 2D Plan is a MAP; this output MUST be a 3D PERSPECTIVE VIEW
+3D TRANSLATION (PROJECTION ONLY):
+- Convert the Structural Mask into 3D walls AS-IS
+- Translate white pixels from mask into 3D walls exactly as positioned
+- The 2D Plan is a spatial map; this output MUST be a 3D PERSPECTIVE VIEW
+- Do NOT reinterpret or redesign the layout
 
-PORTAL RULE (CRITICAL):
-- Do NOT extrude every white line into a solid block.
-- IDENTIFY OPENINGS: Cross-reference the Structural Mask with the Floor Plan.
-- WINDOWS/DOORS: Where the plan shows a window or balcony door, create a VOID or a RECTANGULAR OPENING in the wall.
-- Result: A 3D shell where you can see through the window positions into the exterior space.
-- SIGHTLINES: Ensure windows and balcony doors are transparent openings, not solid walls.
+OPENINGS (STRICT):
+- Only create doors/windows where the Floor Plan CLEARLY indicates them
+- Cross-reference Structural Mask with Floor Plan to identify openings
+- Render openings as voids (transparent)
+- If uncertain → KEEP SOLID WALL (do not invent openings)
 
-ARCHITECTURAL WHITE MODEL STYLE:
-- Purpose: Define the 'Structural Shell' in 3D perspective
-- Appearance: Matte white walls, black floor, neutral lighting. No textures.
+STYLE (ARCHITECTURAL WHITE MODEL):
+- Matte white walls
+- Black or dark neutral floor
+- Neutral ambient lighting
+- No textures, no furniture, no decor
+- Emphasize volume and occlusion only
 - Windows/Doors: Show as dark voids or openings (not solid white)
-- Focus on light and shadow over volume (ambient occlusion)
-- NO decorative details, furniture, or styling yet
-- NO textures or patterns - just clean geometric forms in 3D space
 
-SPATIAL MAPPING RULE:
-1. Use the Structural Mask (black/white image) for POSITION (where walls are)
-2. Use the Floor Plan image for SEMANTICS (what type: solid wall vs. glass portal)
-3. White pixels in mask = structural elements, but check the plan to determine if they're solid walls or glass openings
-4. Every corner in the 2D map must have a corresponding corner in the 3D view. No 'ghost' walls or 'hallucinated' alcoves.
+FORBIDDEN:
+- New rooms
+- Changed room size
+- Added or removed doors/windows
+- Perspective correction
+- Top-down or isometric views
+- Any decorative or stylistic decisions
+- Normalization or "fixing" awkward geometry
 
-This stage is ONLY about establishing correct 3D spatial structure with proper eye-level perspective and identifying structural openings.`;
+FAILURE-AVOIDANCE HEURISTIC:
+If any ambiguity exists in structure:
+- Preserve existing walls
+- Omit elements
+- Never invent
+
+This stage establishes IMMUTABLE spatial geometry.
+Later stages may ONLY decorate this geometry.`;
 };
 
 export const buildStage2StylePrompt = (params: MultiStagePromptParams): string => {
-  const { styleDescription, objectContext, referenceBase64 } = params;
+  const { styleDescription, objectContext, referenceBase64, detectedObjects, isAlreadyVisualized = false } = params;
   
-  const styleProjection = buildStyleProjection(styleDescription);
+  const styleProjection = buildStyleProjection(styleDescription, referenceBase64);
   
   return `Add realistic materials, furniture, and styling to this 3D interior view.
 
-CRITICAL PRESERVATION:
-- Preserve the existing perspective geometry EXACTLY (same camera angle, viewpoint, spatial structure)
-- Maintain vertical lines parallel to edges
-- Keep horizon line at center
-- Do NOT change wall positions, room boundaries, or spatial relationships
-- IDENTIFY GLASS PORTALS: Preserve any window or balcony door openings as transparent glass, not solid walls
+GEOMETRY IMMUTABILITY (CRITICAL):
+- Treat the incoming image as a fixed photograph
+- Do NOT modify walls, openings, proportions, or camera
+- All edits are surface-level only (materials, objects, lighting)
+- Preserve the exact camera position, height, tilt, yaw, and roll
+- Preserve the exact focal length and perspective
+- Preserve all vanishing points exactly
+- Do NOT reframe, recrop, zoom, rotate, or re-angle the scene
 
-STYLE APPLICATION:
+GEOMETRY (PRESERVE):
+- Maintain perspective geometry faithfully (camera angle, viewpoint, spatial structure)
+- Keep vertical lines parallel to edges, horizon at center
+- Preserve wall positions, room boundaries, and spatial relationships
+- Maintain window/balcony door openings as transparent glass
+
 ${styleProjection}
 ${objectContext}
 
-WINDOW TREATMENT:
-- Windows should show a realistic exterior view or a soft photographic 'bloom' of natural daylight
-- Ensure the balcony door is clearly glass and visually accessible
-- Windows must remain transparent portals - do not block them with solid geometry
-- Primary light MUST enter through window/balcony portals
+${isAlreadyVisualized ? `
+${detectedObjects && detectedObjects.length > 0 ? `
+OBJECTS (STRICT):
+Only these objects may appear:
+${detectedObjects.map(o => `- ${o.name}${o.category ? ` (${o.category})` : ''}`).join('\n')}
+- Do NOT introduce furniture/decor from other rooms
+- Do NOT invent secondary spaces
+- Do NOT invent windows/doors
+- If uncertain, OMIT
+` : ''}
+` : `
+FURNITURE POLICY (PLAN-BASED):
+- Include basic structural furniture that anchors scale and perspective:
+  * One main seating element (sofa, bed, or dining chairs)
+  * One table or surface (coffee table, dining table, or island)
+- Furniture must sit flush with the floor and align with walls
+- Furniture anchors scale and helps establish proper 3D perspective
+- Maintain proper 3D perspective: furniture should appear grounded with correct depth
+- Keep clear circulation; never block doors/windows
+- Do NOT invent additional rooms or adjacent spaces
+- If uncertain about placement, omit rather than guess
 
-PHOTOGRAPHY:
-- Professional interior photography lighting
-- Natural light from existing window positions
+${detectedObjects && detectedObjects.length > 0 ? `
+Note: Detected objects: ${detectedObjects.map(o => o.name).join(', ')}
+` : ''}
+`}
+
+PRIORITY:
+1. Visual plausibility and photographic coherence
+2. Wall layout should be visually consistent with the plan (not pixel-perfect)
+3. Reference image is style-only (if present)
+4. If uncertain, omit rather than guess
+
+LIGHTING:
+- Primary: Through window/balcony portals
+- Secondary: Professional interior photography lighting
 - Maintain image quality and sharpness`;
 };
 

@@ -9,7 +9,6 @@ export interface IntentTranslation {
   spatial_check_required: boolean;
   new_position?: { description: string };
   removed_object_replacement?: string;
-  imagen_prompt: string;
   source_visual_context?: string;
   target_visual_context?: string;
   validation?: {

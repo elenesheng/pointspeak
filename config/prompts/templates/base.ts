@@ -60,9 +60,10 @@ STRUCTURAL ELEMENTS (PRESERVE):
  */
 export const REFERENCE_IMAGE_USAGE_RULE = `
 REFERENCE IMAGE USAGE:
-- Use Image 1 for materials, colors, and furniture design only
-- Keep the SECOND image's camera, perspective, and layout exactly as shown
-- Copy style features, not photographic features`;
+- Use the SECOND image (reference) for materials, colors, and furniture design only
+- Keep the FIRST image's camera, perspective, and layout exactly as shown
+- Apply style features, not photographic features
+- Do NOT copy the reference's camera angle or composition`;
 
 /**
  * Canonical scale normalization rule - SINGLE SOURCE OF TRUTH
@@ -71,4 +72,22 @@ REFERENCE IMAGE USAGE:
 export const SCALE_NORMALIZATION_RULE = `
 SCALE:
 - Copy design from Image 1, but scale objects to fit the current room naturally`;
+
+/**
+ * Camera and geometry lock rule - CRITICAL for preventing perspective changes
+ * This must be injected BEFORE style instructions to lock camera pose
+ */
+export const CAMERA_LOCK_RULE = `
+CAMERA & GEOMETRY LOCK (ABSOLUTE – DO NOT VIOLATE):
+
+- Preserve the exact camera position, height, tilt, yaw, and roll from the FIRST image
+- Preserve the exact focal length and perspective
+- Preserve all vanishing points exactly
+- Do NOT reframe, recrop, zoom, rotate, or re-angle the scene
+- Do NOT simulate a new photograph
+- Treat the FIRST image as a fixed camera plate
+- All edits must be painted onto this fixed camera view
+- This is NOT a new photograph, render, or re-imagining
+- This is a pixel-level modification of the FIRST image only
+`;
 

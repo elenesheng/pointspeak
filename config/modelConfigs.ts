@@ -96,13 +96,13 @@ export const MODEL_PRESETS = {
 
   // Rendering - Structure (Stage 1)
   RENDER_STRUCTURE: {
-    temperature: 0.2,
+    temperature: 0.15,
     description: '3D structure generation - Stage 1',
   },
 
   // Rendering - Style (Stage 2)
   RENDER_STYLE: {
-    temperature: 0.4,
+    temperature: 0.18,
     description: '3D style application - Stage 2',
   },
 

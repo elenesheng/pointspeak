@@ -262,7 +262,7 @@ function modelSupportsCaching(model: string): boolean {
  */
 export async function getGeminiCacheName(model: string, nonBlocking: boolean = false): Promise<string | null> {
   // Check if model supports caching
-  // Image-specific models (gemini-3-pro-image-preview, gemini-2.5-flash-image) don't support caching
+  // Image-specific models (gemini-3-pro-image-preview, gemini-3-flash-image) don't support caching
   // This is a Google API limitation - we must use inline context for these models
   if (!modelSupportsCaching(model)) {
     console.log(`[Gemini Cache] Model ${model} doesn't support server-side caching (image models limitation). Using inline context instead.`);

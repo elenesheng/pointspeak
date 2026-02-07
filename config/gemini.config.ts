@@ -11,9 +11,9 @@ export const GEMINI_CONFIG = {
     REASONING_FALLBACK: 'gemini-2.5-flash',
     
     // Image Generation Options
-    // General Image Generation: gemini-2.5-flash-image (Nano Banana)
-    IMAGE_EDITING_FLASH: 'gemini-2.5-flash-image',
-    // High-Quality: gemini-3-pro-image-preview (Nano Banana Pro / Imagen 3)
+    // General Image Generation: gemini-3-flash-image
+    IMAGE_EDITING_FLASH: 'gemini-3-flash-image',
+    // High-Quality: gemini-3-pro-image-preview
     IMAGE_EDITING_PRO: 'gemini-3-pro-image-preview',
   },
   SETTINGS: {
@@ -24,7 +24,6 @@ export const GEMINI_CONFIG = {
   FLAGS: {
     ENABLE_CACHING: true,
     ENABLE_FALLBACK_GENERATION: true,
-    PREFER_IMAGEN: true, // Try Imagen first if configured, fallback to Gemini
     ENABLE_MULTI_PASS_GLOBAL_STYLE: true, // Enable multi-pass orchestration for global style edits
   }
 };

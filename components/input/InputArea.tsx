@@ -30,6 +30,10 @@ interface InputAreaProps {
   // New flag for Rendered View (Plan to 3D)
   isRenderedView?: boolean;
   isPlan?: boolean;
+  
+  // For smart quick actions based on analysis
+  qualityAnalysis?: any;
+  learningStore?: any;
 }
 
 export const InputArea: React.FC<InputAreaProps> = ({ 
@@ -37,7 +41,8 @@ export const InputArea: React.FC<InputAreaProps> = ({
   onReferenceUpload, referenceImagePreview, onClearReference,
   selectedObject, onObjectUpdate, onClearSelection,
   onVisualize, detectedObjects = [], onGetIdeas,
-  isRenderedView = false, isPlan = false
+  isRenderedView = false, isPlan = false,
+  qualityAnalysis, learningStore
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -45,6 +50,102 @@ export const InputArea: React.FC<InputAreaProps> = ({
     if (e.target.files && e.target.files[0] && onReferenceUpload) {
       onReferenceUpload(e.target.files[0]);
     }
+  };
+
+  // Generate smart quick actions based on analysis and user preferences
+  const getSmartQuickActions = () => {
+    if (!selectedObject) return [];
+    
+    const actions: Array<{ label: string; prompt: string; icon: React.ReactNode; priority: number }> = [];
+    
+    // Always include Remove
+    actions.push({
+      label: 'Remove',
+      prompt: `Remove ${selectedObject.name}`,
+      icon: <Trash2 className="w-3.5 h-3.5" />,
+      priority: 0
+    });
+    
+    // Get quality issues for this object
+    if (qualityAnalysis?.issues) {
+      const objectIssues = qualityAnalysis.issues.filter((issue: any) => 
+        issue.location?.toLowerCase().includes(selectedObject.name.toLowerCase()) ||
+        issue.title?.toLowerCase().includes(selectedObject.name.toLowerCase())
+      );
+      
+      // Add fix actions for quality issues
+      objectIssues.slice(0, 2).forEach((issue: any) => {
+        if (issue.auto_fixable && issue.fix_prompt) {
+          actions.push({
+            label: issue.title || 'Fix',
+            prompt: issue.fix_prompt,
+            icon: <Hammer className="w-3.5 h-3.5" />,
+            priority: 1
+          });
+        }
+      });
+    }
+    
+    // Get user preferences from learning store
+    if (learningStore?.patterns) {
+      const patterns = learningStore.patterns;
+      
+      // Add preferred styles
+      if (patterns.likedStyles && patterns.likedStyles.length > 0) {
+        const topStyle = patterns.likedStyles[0];
+        actions.push({
+          label: topStyle,
+          prompt: `Change ${selectedObject.name} to ${topStyle} style`,
+          icon: <Sparkles className="w-3.5 h-3.5" />,
+          priority: 2
+        });
+      }
+      
+      // Add modernize if user likes modern styles
+      if (patterns.likedStyles?.some((s: string) => /modern|contemporary|minimal/i.test(s))) {
+        actions.push({
+          label: 'Modernize',
+          prompt: `Modernize ${selectedObject.name}`,
+          icon: <Sparkles className="w-3.5 h-3.5" />,
+          priority: 3
+        });
+      }
+    }
+    
+    // Category-based defaults (fallback)
+    const category = selectedObject.category;
+    if (category === 'Appliance') {
+      actions.push({
+        label: 'Stainless Steel',
+        prompt: `Change ${selectedObject.name} to Stainless Steel`,
+        icon: <Palette className="w-3.5 h-3.5" />,
+        priority: 4
+      });
+    } else if (category === 'Furniture') {
+      actions.push({
+        label: 'Modern Style',
+        prompt: `Change ${selectedObject.name} style to modern`,
+        icon: <Sparkles className="w-3.5 h-3.5" />,
+        priority: 4
+      });
+    } else if (category === 'Surface') {
+      actions.push({
+        label: 'Marble',
+        prompt: `Change ${selectedObject.name} to white marble`,
+        icon: <Palette className="w-3.5 h-3.5" />,
+        priority: 4
+      });
+    } else if (category === 'Decor') {
+      actions.push({
+        label: 'Modernize',
+        prompt: `Replace ${selectedObject.name} with a modern alternative`,
+        icon: <Sparkles className="w-3.5 h-3.5" />,
+        priority: 4
+      });
+    }
+    
+    // Sort by priority and return top 4
+    return actions.sort((a, b) => a.priority - b.priority).slice(0, 4);
   };
 
   const hasHierarchy = selectedObject && selectedObject.specific_part && selectedObject.whole_object;
@@ -146,110 +247,29 @@ export const InputArea: React.FC<InputAreaProps> = ({
          )}
       </div>
 
-      {/* Smart Quick Actions - Always show Remove, other actions are category-specific */}
-      {selectedObject && !isInteractionDisabled && (
-        <div className="mb-3 flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-          {/* Remove - Always available */}
-          <button
-            onClick={() => setUserInput(`Remove ${selectedObject.name}`)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-xs text-rose-300 whitespace-nowrap transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" /> Remove
-          </button>
-
-          {/* Appliance-specific actions */}
-          {category === 'Appliance' && (
-            <>
+      {/* Smart Quick Actions - Based on analysis and user preferences */}
+      {selectedObject && !isInteractionDisabled && (() => {
+        const smartActions = getSmartQuickActions();
+        return (
+          <div className="mb-3 flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+            {smartActions.map((action, index) => (
               <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to Stainless Steel`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
+                key={index}
+                onClick={() => setUserInput(action.prompt)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors ${
+                  action.priority === 0 
+                    ? 'bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 hover:border-rose-500/50 text-rose-300'
+                    : action.priority === 1
+                    ? 'bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 hover:border-amber-500/50 text-amber-300'
+                    : 'bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-slate-300'
+                }`}
               >
-                <Palette className="w-3.5 h-3.5" /> Stainless Steel
+                {action.icon} {action.label}
               </button>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to Matte Black`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Palette className="w-3.5 h-3.5" /> Matte Black
-              </button>
-            </>
-          )}
-
-          {/* Furniture-specific actions */}
-          {category === 'Furniture' && (
-            <>
-              <button
-                onClick={() => setUserInput(`Upholster ${selectedObject.name} in Cognac Leather`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Sofa className="w-3.5 h-3.5" /> Leather
-              </button>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} style to modern`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Sparkles className="w-3.5 h-3.5" /> Modern Style
-              </button>
-            </>
-          )}
-
-          {/* Surface-specific actions (floors, countertops, walls) */}
-          {category === 'Surface' && (
-            <>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to white marble`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Palette className="w-3.5 h-3.5" /> Marble
-              </button>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to dark oak wood`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Palette className="w-3.5 h-3.5" /> Dark Oak
-              </button>
-            </>
-          )}
-
-          {/* Decor-specific actions */}
-          {category === 'Decor' && (
-            <button
-              onClick={() => setUserInput(`Replace ${selectedObject.name} with a modern alternative`)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-            >
-              <Sparkles className="w-3.5 h-3.5" /> Modernize
-            </button>
-          )}
-
-          {/* Fixture-specific actions (sinks, faucets, lights) */}
-          {category === 'Fixture' && (
-            <>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to brushed gold`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Palette className="w-3.5 h-3.5" /> Gold
-              </button>
-              <button
-                onClick={() => setUserInput(`Change ${selectedObject.name} to matte black`)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-              >
-                <Palette className="w-3.5 h-3.5" /> Black
-              </button>
-            </>
-          )}
-
-          {/* Structure-specific actions (walls, rooms) */}
-          {category === 'Structure' && (
-            <button
-              onClick={() => setUserInput(`Paint ${selectedObject.name} in warm white`)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600 text-xs text-slate-300 whitespace-nowrap transition-colors"
-            >
-              <Palette className="w-3.5 h-3.5" /> Repaint
-            </button>
-          )}
-        </div>
-      )}
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Reference Image Preview */}
       {referenceImagePreview && (
@@ -277,7 +297,8 @@ export const InputArea: React.FC<InputAreaProps> = ({
         <div className="absolute bottom-3 right-3 flex gap-2">
            <button
              onClick={() => fileRef.current?.click()}
-             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-indigo-400 rounded-lg transition-all border border-slate-700 hover:border-slate-600"
+             disabled={isInteractionDisabled}
+             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-indigo-400 rounded-lg transition-all border border-slate-700 hover:border-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
              title="Upload Reference Material"
            >
              <ImagePlus className="w-4 h-4" />
@@ -325,6 +346,7 @@ export const InputArea: React.FC<InputAreaProps> = ({
             onClick={(e) => (e.currentTarget.value = '')} 
         />
       </div>
+
 
       <div className="flex items-center justify-between mt-3 px-1">
           <div className="flex items-center gap-1.5 group cursor-help relative">

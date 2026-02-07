@@ -59,9 +59,14 @@ For EACH recommended style, provide:
   "description": "Brief style description (1-2 sentences)",
   "why_fits": "SPECIFIC, DETAILED explanation referencing actual floor plan features. Example: 'The open-plan layout with large windows and high ceilings makes Modern Minimalist ideal because it emphasizes the spatial flow and natural light. The rectangular room proportions suit clean lines and minimal furniture placement.'",
   "confidence": 0.0-1.0 (how well this style matches the floor plan - be honest based on analysis),
-  "preview_prompt": "Exact, detailed prompt to visualize ${scopeText} in this style${isMultiRoom ? ' (apply consistently across all rooms)' : ''}. Include specific materials, colors, and design elements.",
+  "preview_prompt": "Exact, detailed prompt to visualize ${scopeText} in this style${isMultiRoom ? ' (apply consistently across all rooms)' : ''}. Describe ONLY surface materials (walls, floors, ceilings), color palette, lighting mood, and texture language. DO NOT mention adding, placing, inserting, or introducing any furniture, decor items, fixtures, or architectural elements. Focus on material finishes, colors, and ambient atmosphere.",
   "characteristics": ["trait1", "trait2", "trait3", "trait4"] (3-4 key visual characteristics)
 }
+
+CRITICAL CONSTRAINT FOR preview_prompt:
+- preview_prompt MUST NOT mention adding, placing, inserting, or introducing any furniture, decor items, fixtures, or architectural elements (e.g., chandeliers, sofas, tables, wall paneling, arches, crown molding, wainscoting)
+- preview_prompt MUST ONLY describe: surface materials (walls/floors/ceilings), color palette, lighting mood (warm/cool/soft), texture language, and decor level (minimal/moderate) without specifying objects
+- If architectural details (molding, wainscoting, paneling) are part of the style, describe them as "optional subtle trim" or "omit if uncertain" rather than mandatory additions
 
 STYLE OPTIONS TO CONSIDER:
 - Modern Minimalist: Clean lines, open spaces, neutral palette
