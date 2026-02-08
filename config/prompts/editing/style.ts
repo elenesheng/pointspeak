@@ -15,62 +15,22 @@ export const buildStyleAction = (params: StylePromptParams): string => {
   const { objectDescription, proposedAction, isGlobalStyle, isFurniture, isSurface, hasReferenceImage } = params;
   
   if (isGlobalStyle) {
-    return `You are modifying an EXISTING ROOM IMAGE.
+    // Global style: text-only mode (no reference image sent to generation)
+    return `STYLE APPLICATION TASK:
 
-STRUCTURAL CONSTRAINTS (ABSOLUTE — NEVER CHANGE):
-- Walls, wall thickness, corners, and room boundaries
-- Doors: position, size, swing direction
-- Windows: position, size, proportions
-- Plumbing points (sinks, toilets, showers): fixed
-- Electrical points (outlets, switches, built-in lighting): fixed
-
-These elements MUST remain exactly as shown in the base image.
-If uncertain, preserve the original structure.
-
-CAMERA LOCK (CRITICAL):
-- Preserve the exact camera position, height, tilt, yaw, and roll
-- Preserve the exact focal length and perspective
-- Preserve all vanishing points exactly
-- Do NOT reframe, recrop, zoom, rotate, or re-angle the scene
-- Do NOT simulate a new photograph
-- This is NOT a new photograph, render, or re-imagining
-- This is a pixel-level modification of the FIRST image only
-
-STYLE APPLICATION TASK:
-
-Use the REFERENCE IMAGE only as a STYLE CATALOG.
-
-Apply the following from the reference image:
-- Material choices (wood type, stone, metal finishes)
-- Color palette and tonal balance
-- Furniture style and typology (replace furniture if appropriate)
-- Textile types (fabric, rugs, curtains)
-- Lighting fixture style and warmth
-- Decorative language (plants, art, accessories)
+Apply the style described in the text instructions below to THIS room photo.
+All style details (materials, colors, furniture) are provided as text - follow them exactly.
 
 You MAY:
-- Replace furniture with reference-style equivalents
-- Add furniture if it improves function and does not block circulation
-- Remove furniture that conflicts with the style
+- Replace furniture with the specified style equivalents
+- Add furniture if specified in the plan and it does not block circulation
+- Change materials and colors as specified
 
 You MUST:
 - Keep furniture scale realistic for THIS room
 - Adapt furniture size to fit the existing space
 - Maintain clear walkways and access to doors/windows
-
-REFERENCE IMAGE RULES:
-
-- The reference image is NOT the output.
-- Do NOT copy the reference layout, room shape, or camera view.
-- Do NOT recreate the reference room.
-
-Instead:
-- Translate the reference STYLE into the current room.
-- Adapt proportions, furniture count, and placement to THIS space.
-- If a reference element does not fit physically, OMIT it.
-
-The final image must clearly be the ORIGINAL ROOM,
-restyled with the reference aesthetic.
+- Keep ALL structural elements (walls, doors, windows, plumbing) in exact positions
 
 QUALITY REQUIREMENTS:
 - Photorealistic materials and lighting
@@ -92,14 +52,24 @@ Ensure the new object sits exactly in the current position and matches the room'
 Shadows must be physically accurate to the floor beneath it.
 Maintain the same general size and scale as the original object.`;
     } else if (isSurface) {
-      // For surfaces: Apply material/texture (resurfacing)
-      return `Apply the material from the reference image onto the existing ${objectDescription}.
+      // For surfaces: Apply material/texture from reference image (resurfacing)
+      return `Re-texture the ${objectDescription} using the material shown in the SECOND (reference) image.
 
 MATERIAL RESURFACING TASK:
-- Keep the current structure, size, and position
-- Apply the reference material (e.g., the specific wood grain, tile pattern, or stone texture)
-- The transition between the new material and adjacent objects must be seamless
-- Match the exact texture, color, and finish from the reference`;
+- Extract the exact material pattern, color, grain, and texture from the SECOND image
+- Map this material onto the ${objectDescription} in the FIRST image using correct perspective
+- The material must tile/repeat naturally to cover the ENTIRE surface area
+- Match the lighting and shadow conditions of the FIRST image on the new material
+- The new material must follow the same perspective vanishing points as the original surface
+
+SURFACE BOUNDARIES (ABSOLUTE - DO NOT CHANGE):
+- The ${objectDescription} must cover the EXACT same area as the original
+- Do NOT shrink, expand, or shift the surface boundaries
+- Preserve all junctions where the surface meets walls, cabinets, appliances, or other objects
+- If the original surface has sections (e.g., tile + wood), maintain those exact boundary lines
+
+WHAT CHANGES: Only the material/texture/color of the ${objectDescription}
+WHAT STAYS: Everything else - walls, cabinets, furniture, appliances, lighting, camera, dimensions`;
     }
   }
   

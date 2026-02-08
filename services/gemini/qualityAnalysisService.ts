@@ -1,3 +1,7 @@
+/**
+ * Quality analysis service for detecting and categorizing image quality issues.
+ * Provides auto-fixable suggestions and prompt optimization tips.
+ */
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
 import { getApiKey, withSmartRetry, runWithFallback } from '../../utils/apiUtils';
@@ -13,6 +17,8 @@ export interface QualityIssue {
   location?: string;
   fix_prompt: string;
   auto_fixable: boolean;
+  // MANDATORY: Self-correction suggestions (always provided, not optional)
+  prompt_optimization_tips: string[]; // e.g., ["Try lower temperature (0.1)", "Split into: remove X, then add Y"]
 }
 
 export interface QualityAnalysis {
@@ -20,6 +26,20 @@ export interface QualityAnalysis {
   style_detected: string;
   issues: QualityIssue[];
   strengths: string[];
+  // MANDATORY: Overall prompt intelligence guidance (always provided)
+  prompt_guidance: {
+    complex_operations: Array<{
+      operation: string; // e.g., "Replace all cabinets with modern white ones"
+      complexity_reason: string; // e.g., "Multiple objects, style change, requires precision"
+      suggested_approach: string; // e.g., "Split: 1) Change cabinet style 2) Adjust hardware 3) Update finish"
+      temperature_recommendation: number; // e.g., 0.1 for precision
+    }>;
+    risky_patterns: Array<{
+      pattern: string; // e.g., "Global redesign with reference image"
+      risk: string; // e.g., "May copy reference layout instead of style only"
+      mitigation: string; // e.g., "Use text-only mode - describe style without reference image"
+    }>;
+  };
 }
 
 const qualityIssueSchema: Schema = {
@@ -35,8 +55,13 @@ const qualityIssueSchema: Schema = {
     location: { type: Type.STRING },
     fix_prompt: { type: Type.STRING, description: 'Exact prompt to fix this issue' },
     auto_fixable: { type: Type.BOOLEAN },
+    prompt_optimization_tips: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: 'MANDATORY: 2-4 optimization suggestions for this fix (temperature, complexity, split steps, etc.)'
+    },
   },
-  required: ['severity', 'category', 'title', 'description', 'fix_prompt', 'auto_fixable'],
+  required: ['severity', 'category', 'title', 'description', 'fix_prompt', 'auto_fixable', 'prompt_optimization_tips'],
 };
 
 const qualityAnalysisSchema: Schema = {
@@ -46,8 +71,39 @@ const qualityAnalysisSchema: Schema = {
     style_detected: { type: Type.STRING },
     issues: { type: Type.ARRAY, items: qualityIssueSchema },
     strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+    prompt_guidance: {
+      type: Type.OBJECT,
+      properties: {
+        complex_operations: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              operation: { type: Type.STRING },
+              complexity_reason: { type: Type.STRING },
+              suggested_approach: { type: Type.STRING },
+              temperature_recommendation: { type: Type.NUMBER },
+            },
+            required: ['operation', 'complexity_reason', 'suggested_approach', 'temperature_recommendation'],
+          },
+        },
+        risky_patterns: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              pattern: { type: Type.STRING },
+              risk: { type: Type.STRING },
+              mitigation: { type: Type.STRING },
+            },
+            required: ['pattern', 'risk', 'mitigation'],
+          },
+        },
+      },
+      required: ['complex_operations', 'risky_patterns'],
+    },
   },
-  required: ['overall_score', 'style_detected', 'issues', 'strengths'],
+  required: ['overall_score', 'style_detected', 'issues', 'strengths', 'prompt_guidance'],
 };
 
 // Learning context interface
@@ -56,12 +112,14 @@ interface LearningContext {
   avoidedActions: string[];
   contextualInsights: string;
   warningsForAI: string[];
+  recentFailures?: string[];
 }
 
 export const analyzeImageQuality = async (
   imageBase64: string,
   is2DPlan: boolean = false,
-  learningContext?: LearningContext
+  learningContext?: LearningContext,
+  previousAttempts?: string[]
 ): Promise<QualityAnalysis> => {
   const cacheKey = `quality_${imageBase64.length}_${imageBase64.slice(-20)}`;
 
@@ -82,6 +140,28 @@ export const analyzeImageQuality = async (
       }
     }
     
+    // Add self-correction context from previous attempted fixes
+    if (previousAttempts && previousAttempts.length > 0) {
+      learningSection += `\n\nSELF-CORRECTION (CRITICAL - PREVIOUS FIX ATTEMPTS THAT WERE APPLIED BUT DID NOT FULLY RESOLVE):
+${previousAttempts.map((p, i) => `  ${i + 1}. "${p}"`).join('\n')}
+
+SELF-CORRECTION RULES:
+- These prompts were already tried. If the issue persists, the prompt FAILED or was insufficient.
+- You MUST suggest DIFFERENT approaches for the same issues:
+  * Try DIFFERENT wording (more specific object names, spatial anchors)
+  * Try DIFFERENT temperature (lower for precision: 0.1, higher for creative: 0.2)
+  * Try SPLITTING complex operations into simpler steps
+  * Try a completely DIFFERENT strategy (e.g., remove then add instead of replace)
+- NEVER repeat the exact same fix_prompt that already failed
+- In prompt_optimization_tips, explain WHY the previous attempt likely failed and what's different now`;
+    }
+
+    // Add recent failure details from learning store
+    if (learningContext?.recentFailures && learningContext.recentFailures.length > 0) {
+      learningSection += `\n\nRECENT EDIT FAILURES (learn from these):
+${learningContext.recentFailures.map(f => `  - ${f}`).join('\n')}`;
+    }
+
     // Add learned prompt patterns from cache (what worked/failed)
     // This helps analysis suggest better prompts based on past failures
     const learnedPatterns = getInlineContext();
@@ -113,12 +193,7 @@ export const analyzeImageQuality = async (
       // Try to get cache (will return null for image models or if too small)
       const cacheName = await getGeminiCacheName(model, true);
       
-      // Build system instruction with learning context
       const inlineContext = !cacheName ? getInlineContext() : undefined;
-      if (inlineContext) {
-        console.log(`[Quality Analysis] Using inline context (${inlineContext.length} chars)`);
-      }
-      
       const systemInstructionText = buildQualityAnalysisSystemPrompt({
         learningSection,
         is2DPlan,
@@ -134,7 +209,6 @@ export const analyzeImageQuality = async (
       
       if (cacheName) {
         config.cachedContent = cacheName;
-        console.log(`[Quality Analysis] ✓ Using cached context: ${cacheName}`);
       }
       
       const response = await ai.models.generateContent({
@@ -220,6 +294,10 @@ Be thorough but fair. Not every edit introduces problems.
     style_detected: 'Unknown',
     issues: [],
     strengths: ['Edit applied successfully'],
+    prompt_guidance: {
+      complex_operations: [],
+      risky_patterns: [],
+    },
   };
 };
 

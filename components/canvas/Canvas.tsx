@@ -425,7 +425,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
           {!shouldBlur && pins.map((pin, index) => (
               <div key={index} className="absolute z-20" style={{ left: `${pin.x / 10}%`, top: `${pin.y / 10}%`, transform: 'translate(-50%, -50%)' }}>
-                <div className={`w-4 h-4 rounded-full border-2 border-white shadow-lg ${index === 0 ? 'bg-red-500' : 'bg-green-500'}`} />
+                <div className="w-4 h-4 rounded-full border-2 border-white shadow-lg bg-red-500" />
               </div>
           ))}
         </div>

@@ -157,17 +157,17 @@ function buildPromptForMode(
   userGoal: string,
   learningContext?: SuggestionContext['learningContext']
 ): string {
-  // Learning context
+  // Learning context - build rich user preference section
   let learningSection = '';
   if (learningContext) {
     if (learningContext.stylePreferences.length > 0) {
-      learningSection += `User prefers: ${learningContext.stylePreferences.slice(0, 5).join(', ')}\n`;
+      learningSection += `PREFERRED STYLES: ${learningContext.stylePreferences.slice(0, 5).join(', ')}\n`;
     }
     if (learningContext.avoidedActions.length > 0) {
-      learningSection += `Avoid: ${learningContext.avoidedActions.slice(0, 3).join(', ')}\n`;
+      learningSection += `AVOID THESE: ${learningContext.avoidedActions.slice(0, 3).join(', ')}\n`;
     }
     if (learningContext.contextualInsights) {
-      learningSection += `Context: ${learningContext.contextualInsights}\n`;
+      learningSection += `ROOM INSIGHTS: ${learningContext.contextualInsights}\n`;
     }
   }
 
@@ -320,7 +320,6 @@ export const generateFloorPlanStyleCards = async (
     
     if (cacheName) {
       config.cachedContent = cacheName;
-      console.log(`[Style Cards] Using cached context: ${cacheName}`);
     }
 
     const response = await ai.models.generateContent({
@@ -359,17 +358,10 @@ export const generateFloorPlanStyleCards = async (
     const validatedStyles = styles
       .filter(s => {
         const hasPrompt = s.preview_prompt && s.preview_prompt.trim();
-        if (!hasPrompt) {
-          console.warn('[Style Cards] Missing preview_prompt for style:', s.name || 'unnamed');
-        }
         return s.name && s.description && hasPrompt;
       })
       .map((s, i) => {
-        // Ensure preview_prompt is not empty
         const prompt = s.preview_prompt?.trim() || '';
-        if (!prompt) {
-          console.error('[Style Cards] Empty preview_prompt for style:', s.name);
-        }
         return {
           id: `style_${Date.now()}_${i}`,
           name: s.name || 'Unnamed Style',
@@ -382,12 +374,8 @@ export const generateFloorPlanStyleCards = async (
       });
 
     if (validatedStyles.length === 0) {
-      console.error('[Style Cards] All styles filtered out - missing preview_prompt in response:', styles);
       throw new Error('No valid styles after validation - check that preview_prompt is generated');
     }
-
-    // Log first style to verify prompt exists
-    console.log('[Style Cards] Generated', validatedStyles.length, 'styles. First prompt:', validatedStyles[0]?.preview_prompt?.slice(0, 50));
 
     return validatedStyles;
   }, cacheKey);

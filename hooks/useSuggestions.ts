@@ -52,15 +52,17 @@ export const useSuggestions = (
     }
 
     try {
-      // Get learning context for personalized suggestions
+      // Get learning context for personalized suggestions (includes style prefs, failures, warnings)
       const baseLearning = learningStore.getLearningContext();
+      // Enrich with room-specific contextual insights
+      const roomInsights = learningStore.getContextualInsights(
+        roomAnalysis.room_type,
+        !!roomAnalysis.is_2d_plan
+      );
       const learningContext = {
         stylePreferences: baseLearning.stylePreferences || [],
         avoidedActions: baseLearning.avoidedActions || [],
-        contextualInsights: learningStore.getContextualInsights(
-          roomAnalysis.room_type,
-          !!roomAnalysis.is_2d_plan
-        ),
+        contextualInsights: [baseLearning.contextualInsights, roomInsights].filter(Boolean).join('. '),
       };
 
       // Use unified suggestion service with automatic mode detection
@@ -82,7 +84,6 @@ export const useSuggestions = (
           }
       }
     } catch (error) {
-      console.error(error);
       if (userGoal !== 'auto-refresh') {
           addLog("Failed to generate suggestions.", 'error');
       }

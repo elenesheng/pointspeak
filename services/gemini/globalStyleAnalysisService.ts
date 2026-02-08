@@ -16,6 +16,10 @@ export interface GlobalStylePlan {
     furniture_styles: string[];
     lighting_characteristics: string;
     overall_aesthetic: string;
+    // NEW: Spatial intelligence
+    room_proportions?: string; // e.g., "Narrow galley kitchen, 8:3 aspect ratio"
+    furniture_scale?: string; // e.g., "Compact furniture suitable for small spaces"
+    spatial_flow?: string; // e.g., "Open plan, wide circulation paths"
   };
   current_room_analysis: {
     room_structure: string;
@@ -23,6 +27,21 @@ export interface GlobalStylePlan {
     spatial_constraints: string[];
     camera_angle: string;
     image_proportions: string;
+    // NEW: Enhanced spatial understanding
+    room_proportions?: string;
+    available_space?: string; // e.g., "Limited floor space, vertical storage opportunity"
+    circulation_requirements?: string; // e.g., "36\" walkway to kitchen, 18\" clearance at cabinets"
+  };
+  // NEW: Intelligent adaptation strategy
+  spatial_adaptation?: {
+    furniture_scale_adjustments: Array<{
+      item: string;
+      reference_size: string; // e.g., "Large sectional sofa, 120\" wide"
+      target_size: string; // e.g., "Medium loveseat, 72\" wide to fit wall"
+      reasoning: string; // e.g., "Reference room is 40% larger; scale furniture proportionally"
+    }>;
+    layout_adaptations: string[]; // e.g., ["Omit dining table - insufficient space", "Use wall-mounted desk instead of freestanding"]
+    material_priorities: string[]; // e.g., ["Floor material critical for cohesion", "Wall color less important due to different proportions"]
   };
   application_strategy: {
     materials_to_apply: Array<{
@@ -37,6 +56,8 @@ export interface GlobalStylePlan {
     critical_preservations: string[];
   };
   execution_instructions: string;
+  // NEW: Architect's perspective
+  design_rationale?: string; // Paragraph explaining why this adaptation makes sense
 }
 
 const globalStylePlanSchema: Schema = {
@@ -64,9 +85,21 @@ const globalStylePlanSchema: Schema = {
           type: Type.STRING,
           description: "Lighting you ACTUALLY SEE in Image 1 (e.g., 'Bright natural light', 'Warm ambient'). Describe what is VISUALLY PRESENT."
         },
-        overall_aesthetic: { 
+        overall_aesthetic: {
           type: Type.STRING,
           description: "Aesthetic you ACTUALLY SEE in Image 1 (e.g., 'Scandinavian', 'Modern Minimalist'). Based on visual observation."
+        },
+        room_proportions: {
+          type: Type.STRING,
+          description: "Room size and proportions you see in Image 1 (e.g., 'Spacious 16x14 room', 'Compact galley layout'). Analyze spatial scale."
+        },
+        furniture_scale: {
+          type: Type.STRING,
+          description: "Furniture sizing relative to room in Image 1 (e.g., 'Oversized sectionals', 'Compact furniture', 'Proportional to space')"
+        },
+        spatial_flow: {
+          type: Type.STRING,
+          description: "Circulation and openness in Image 1 (e.g., 'Open plan', 'Wide walkways', 'Tight circulation')"
         },
       },
       required: ['dominant_materials', 'color_palette', 'furniture_styles', 'lighting_characteristics', 'overall_aesthetic'],
@@ -79,8 +112,49 @@ const globalStylePlanSchema: Schema = {
         spatial_constraints: { type: Type.ARRAY, items: { type: Type.STRING } },
         camera_angle: { type: Type.STRING },
         image_proportions: { type: Type.STRING },
+        room_proportions: {
+          type: Type.STRING,
+          description: "Current room size analysis (e.g., 'Narrow 12x8 space', 'Square 14x14'). Visually assess proportions."
+        },
+        available_space: {
+          type: Type.STRING,
+          description: "Space availability (e.g., 'Limited floor space', 'Open area for large furniture', 'Vertical wall space available')"
+        },
+        circulation_requirements: {
+          type: Type.STRING,
+          description: "Walkway and clearance needs (e.g., '36\" main walkway', '18\" clearance at counters', 'Doorway access preserved')"
+        },
       },
       required: ['room_structure', 'existing_furniture', 'spatial_constraints', 'camera_angle', 'image_proportions'],
+    },
+    spatial_adaptation: {
+      type: Type.OBJECT,
+      properties: {
+        furniture_scale_adjustments: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              item: { type: Type.STRING, description: 'Furniture piece name' },
+              reference_size: { type: Type.STRING, description: 'Size in reference room (e.g., "120\" sectional sofa")' },
+              target_size: { type: Type.STRING, description: 'Appropriate size for current room (e.g., "84\" loveseat")' },
+              reasoning: { type: Type.STRING, description: 'Why this scale adjustment (e.g., "Current room 40% smaller, scale proportionally")' },
+            },
+            required: ['item', 'reference_size', 'target_size', 'reasoning'],
+          },
+        },
+        layout_adaptations: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'Layout changes needed due to space differences (e.g., "Omit coffee table - insufficient clearance")'
+        },
+        material_priorities: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: 'Which materials are most important for the aesthetic (e.g., "Floor material critical", "Wall color secondary")'
+        },
+      },
+      required: ['furniture_scale_adjustments', 'layout_adaptations', 'material_priorities'],
     },
     application_strategy: {
       type: Type.OBJECT,
@@ -114,6 +188,10 @@ const globalStylePlanSchema: Schema = {
       required: ['materials_to_apply', 'furniture_to_add', 'furniture_to_replace', 'placement_guidelines', 'critical_preservations'],
     },
     execution_instructions: { type: Type.STRING },
+    design_rationale: {
+      type: Type.STRING,
+      description: 'Architect-level explanation of why this design adaptation makes sense for this specific space (2-3 sentences)'
+    },
   },
   required: ['reference_analysis', 'current_room_analysis', 'application_strategy', 'execution_instructions'],
 };
@@ -133,46 +211,90 @@ export const analyzeGlobalStyleApplication = async (
   ]);
 
   const analysisPrompt = `
-Analyze two images and create a plan to copy visible features from Image 1 to Image 2.
+You are a SENIOR INTERIOR ARCHITECT and SPATIAL DESIGNER with 15+ years of experience.
 
-IMAGE 1: REFERENCE (copy features from this)
+EXPERTISE:
+- Deep understanding of spatial proportions, furniture scale, and circulation requirements
+- Ability to translate design language across different room sizes and layouts
+- Architect-level reasoning about what works and what doesn't in a given space
+
+IMAGE 1: REFERENCE STYLE (extract design language)
 IMAGE 2: CURRENT ROOM (preserve geometry and layout)
 
 CONSTRAINTS:
 - Same room, same camera, same layout
 - Only change materials, furniture, decor
 
-YOUR ANALYSIS TASK:
+ANALYSIS TASK (Think like a senior architect):
 
-1. REFERENCE ANALYSIS (Image 1):
-   List what you see:
-   - Colors (e.g., "Light beige", "White", "Natural oak")
-   - Materials (e.g., "White painted wood", "Light gray tile")
-   - Furniture (e.g., "White dining chairs", "Light wood table")
-   - Lighting (brightness, warmth)
-   - Overall aesthetic
+1. REFERENCE ROOM ANALYSIS (Image 1) - Analyze as an architect would:
 
-2. CURRENT ROOM ANALYSIS (Image 2):
-   - Describe the room structure (layout, walls, openings)
-   - List existing furniture and their positions
-   - Identify spatial constraints (doorways, windows, plumbing fixtures, walkways)
-   - Analyze camera angle and perspective (e.g., "Eye-level, slightly elevated, looking northeast")
-   - Note image proportions and composition (e.g., "16:9 landscape, wide-angle view")
+   DESIGN LANGUAGE:
+   - Colors you ACTUALLY SEE (e.g., "Light beige", "White", "Warm gray")
+   - Materials you ACTUALLY SEE (e.g., "White painted wood", "Natural oak flooring")
+   - Furniture styles you ACTUALLY SEE (e.g., "Mid-century modern dining chairs", "Minimalist light wood table")
+   - Lighting characteristics (brightness, warmth, fixture styles)
+   - Overall aesthetic (e.g., "Scandinavian", "Modern Minimalist")
 
-3. APPLICATION STRATEGY:
-   For each material in Image 1, specify:
-   - Surface location (e.g., "floor", "left wall", "cabinet fronts")
-   - Material type from Image 1
-   - Finish (matte, satin, glossy, etc.)
-   - Exact color from Image 1
-   
-   List furniture from Image 1 to add and replace.
-   Create placement guidelines respecting spatial constraints.
+   SPATIAL ANALYSIS:
+   - Room proportions and scale (e.g., "Spacious 16x14 room", "Compact galley kitchen")
+   - Furniture sizing relative to room (e.g., "Oversized sectionals dominate space", "Proportional furniture")
+   - Spatial flow and circulation (e.g., "Open plan with wide walkways", "Tight circulation")
 
-4. EXECUTION INSTRUCTIONS:
-   Create step-by-step instructions to copy features from Image 1 to Image 2.
-   Use the exact colors and materials listed above.
-   Preserve room geometry and camera.
+2. CURRENT ROOM ANALYSIS (Image 2) - Understand the existing space:
+
+   STRUCTURE:
+   - Room layout and proportions (visually measure width-to-depth ratio)
+   - Existing furniture and their sizes
+   - Spatial constraints (doorways, windows, plumbing, built-ins, clearances)
+   - Camera angle and perspective
+   - Available space for new furniture (wall lengths, open floor area)
+
+   CIRCULATION REQUIREMENTS:
+   - Walkway widths (estimate 36" main paths, 18" secondary clearances)
+   - Access to doors, windows, appliances
+   - Functional zones that must remain accessible
+
+3. INTELLIGENT SPATIAL ADAPTATION (Critical architect reasoning):
+
+   COMPARE ROOM SIZES:
+   - Is Image 2 (current) room larger, smaller, or similar to Image 1 (reference)?
+   - Estimate percentage difference (e.g., "Current room ~40% smaller than reference")
+
+   FURNITURE SCALE ADJUSTMENTS:
+   For EACH furniture piece in Image 1, determine:
+   - Reference size (estimate dimensions, e.g., "120\" wide sectional sofa")
+   - Will it fit in Image 2's available space?
+   - If NO: Specify scaled-down alternative (e.g., "84\" loveseat to maintain proportion")
+   - If YES: Keep similar size
+   - Reasoning: WHY this adjustment (e.g., "Current room 40% smaller; sectional would block circulation")
+
+   LAYOUT ADAPTATIONS:
+   - Which furniture pieces won't fit? (e.g., "Omit oversized coffee table - insufficient clearance")
+   - What alternatives maintain the style? (e.g., "Use nesting tables instead")
+   - How to adapt placement given different wall lengths/windows?
+
+   MATERIAL PRIORITIES:
+   - Which materials are essential to the aesthetic? (e.g., "Light wood flooring critical for warmth")
+   - Which can be adapted? (e.g., "Wall color less critical due to different proportions")
+
+4. APPLICATION STRATEGY:
+   Based on your spatial adaptation analysis:
+   - List materials to apply (with surface locations, exact materials, finishes, colors from Image 1)
+   - List furniture to add/replace (with appropriate sizing for Image 2)
+   - Create placement guidelines that respect Image 2's spatial constraints
+   - Specify critical elements to preserve (structural, plumbing, electrical)
+
+5. EXECUTION INSTRUCTIONS:
+   Write step-by-step instructions that:
+   - Apply materials thoughtfully (not mechanically)
+   - Scale furniture appropriately for THIS room size
+   - Maintain design cohesion while respecting spatial constraints
+   - Preserve all structural elements, camera angle, and layout
+
+6. DESIGN RATIONALE:
+   As a senior architect, explain in 2-3 sentences why this adaptation makes sense for this specific space.
+   Address: scale adjustments, layout changes, material priorities, and how the design translates.
 
 SCENE INVENTORY:
 ${sceneInventory}
@@ -206,7 +328,6 @@ OUTPUT: Provide JSON plan with specific colors, materials, and furniture from Im
     if (!text) throw new Error('Empty response from global style analysis');
 
     const parsed = JSON.parse(text) as GlobalStylePlan;
-    console.log('[GlobalStyleAnalysis] Plan created:', parsed);
     return parsed;
   };
 

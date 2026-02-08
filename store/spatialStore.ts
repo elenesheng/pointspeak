@@ -147,11 +147,30 @@ export const useSpatialStore = create<SpatialState>((set, get) => ({
       const currentVersion = state.versions[state.currentVersionId];
       if (!currentVersion) return state;
       
-      // CRITICAL: Never update the original version (index 0) - it must remain immutable
-      const isOriginal = state.versionOrder.length > 0 && state.versionOrder[0] === state.currentVersionId;
-      if (isOriginal) {
-        console.warn('[Versioning] Attempted to update original version - ignoring to preserve original');
-        return state;
+      // CRITICAL FIX #5: Never update the original version (index 0)
+      // If we're on the original version and trying to update base64, create a new version instead
+      // This prevents silent failures when updating original version during multi-pass edits
+      const isOriginalVersion = state.versionOrder.length > 0 && 
+                                state.currentVersionId === state.versionOrder[0];
+      
+      if (isOriginalVersion && updates.base64) {
+        // Create a new version instead of updating original
+        const id = Math.random().toString(36).substr(2, 9);
+        const snapshot: VersionSnapshot = {
+          ...currentVersion,
+          ...updates,
+          id,
+          timestamp: new Date(),
+        };
+        return {
+          versions: { ...state.versions, [id]: snapshot },
+          versionOrder: [...state.versionOrder, id],
+          currentVersionId: id,
+        };
+      }
+      
+      if (isOriginalVersion && !updates.base64) {
+        // Non-base64 updates on original version are allowed
       }
       
       const updatedSnapshot = {

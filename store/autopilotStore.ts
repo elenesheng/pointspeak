@@ -1,3 +1,6 @@
+/**
+ * Autopilot store for managing automated editing configuration and progress.
+ */
 import { create } from 'zustand';
 
 export interface AutopilotConfig {

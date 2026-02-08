@@ -1,15 +1,21 @@
+/**
+ * Image editing service using Gemini API. Handles object replacement, surface replacement,
+ * and global style edits with reference image support and dimension validation.
+ */
 import { GoogleGenAI } from '@google/genai';
 import { IntentTranslation } from '../../types/ai.types';
 import { DetailedRoomAnalysis, IdentifiedObject } from '../../types/spatial.types';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
 import { getApiKey } from '../../utils/apiUtils';
-import { convertToJPEG, convertToPNG, normalizeBase64 } from '../../utils/imageProcessing';
+import { convertToJPEG, convertToPNG, normalizeBase64, getImageDimensions } from '../../utils/imageProcessing';
 import { recordEdit } from './contextCacheService';
 import { buildEditingPrompt } from '../../config/prompts/editing';
 import { analyzeGlobalStyleApplication, GlobalStylePlan } from './globalStyleAnalysisService';
 import { REFERENCE_IMAGE_USAGE_RULE, SCALE_NORMALIZATION_RULE, SPATIAL_AWARENESS_CONSTRAINTS } from '../../config/prompts/templates/base';
+import { resolveEditMode } from '../../config/prompts/editing/modeResolver';
+import { getImageEditingConfigForMode } from '../../config/modelConfigs';
+import { similarityScore } from '../../utils/imageSimilarity';
 
-// Constants
 const GLOBAL_CONTEXT_ID = 'global_room_context';
 const GLOBAL_STYLE_KEYWORDS = /room|whole|entire|global|all|redesign/i;
 const CONTAINER_PATTERNS = /shelf|shelves|cabinet|bookcase|rack|display|drawer/i;
@@ -45,8 +51,6 @@ export const performImageEdit = async (
   onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
 ): Promise<string> => {
 
-  // Always use Gemini for image editing
-  console.log('[ImageEdit] Using Gemini for image editing');
   return performGeminiEdit(
     currentImageBase64,
     translation,
@@ -64,9 +68,6 @@ export const performImageEdit = async (
 };
 
 
-/**
- * Build focused prompt for materials pass
- */
 const buildMaterialsPassPrompt = (
   stylePlan: GlobalStylePlan,
   surfaces: Array<{ surface: string; material: string; finish: string; color: string }>,
@@ -100,9 +101,6 @@ Apply these materials to the FIRST image's surfaces. Use only the colors listed 
 Return the FIRST image modified.`;
 };
 
-/**
- * Build focused prompt for furniture pass
- */
 const buildFurniturePassPrompt = (
   stylePlan: GlobalStylePlan,
   toAdd: string[],
@@ -133,242 +131,8 @@ Return the FIRST image modified.`;
 };
 
 /**
- * Build focused prompt for decor pass
- */
-const buildDecorPassPrompt = (
-  stylePlan: GlobalStylePlan,
-  referenceImageBase64: string
-): string => {
-  const lightingChar = stylePlan.reference_analysis.lighting_characteristics;
-  const aesthetic = stylePlan.reference_analysis.overall_aesthetic;
-
-  return `OUTPUT RULE (CRITICAL):
-- The output MUST be a modification of the FIRST image provided
-- NEVER output the second image or a re-creation of it
-- If the second image already satisfies the request, you must still modify the first image instead
-
-PASS 3: Add decor and refine lighting in the first image.
-
-Preserve all walls, windows, doors from the FIRST image.
-Preserve camera, perspective, and layout from the FIRST image exactly.
-Preserve materials and furniture from previous passes.
-
-DECOR:
-- Add decorative elements inspired by the second image:
-  * artwork
-  * plants
-  * rugs
-  * accessories
-- Match colors and styles from the second image
-- Adapt to fit the FIRST image naturally
-
-LIGHTING:
-- Target: ${lightingChar}
-- Adjust brightness and warmth to match the second image
-- Preserve the FIRST image's light direction and shadows
-
-AESTHETIC: ${aesthetic}
-
-Return the FIRST image modified.`;
-};
-
-
-/**
- * Executes a single pass with focused prompt
- */
-const executePass = async (
-  inputImageBase64: string,
-  prompt: string,
-  referenceImageBase64: string,
-  preferredModelId: string,
-  passName: string
-): Promise<string> => {
-  const apiKey = getApiKey();
-  const ai = new GoogleGenAI({ apiKey });
-
-  // Convert images to JPEG for API (high quality to prevent degradation)
-  const [referenceJpeg, currentJpeg] = await Promise.all([
-    convertToJPEG(normalizeBase64(referenceImageBase64), 0.98), // Higher quality
-    convertToJPEG(normalizeBase64(inputImageBase64), 0.98), // Higher quality
-  ]);
-
-  // Add canonical rules to all passes (single source of truth)
-  const fullPrompt = `${prompt}
-
-${REFERENCE_IMAGE_USAGE_RULE}
-
-${SCALE_NORMALIZATION_RULE}
-
-${SPATIAL_AWARENESS_CONSTRAINTS}`;
-
-  // CRITICAL: Current image FIRST (base), reference SECOND (style source)
-  const parts = [
-    { inlineData: { mimeType: MIME_TYPE_JPEG, data: currentJpeg } },
-    { inlineData: { mimeType: MIME_TYPE_JPEG, data: referenceJpeg } },
-    { text: fullPrompt },
-  ];
-
-  const isPro = preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO;
-  const temperature = isPro ? 0.2 : 0.15; // Low temperature for accurate copying
-
-  const response = await ai.models.generateContent({
-    model: preferredModelId,
-    contents: { parts },
-    config: {
-      temperature,
-      topP: TOP_P,
-      topK: TOP_K,
-      imageConfig: isPro ? { imageSize: IMAGE_SIZE_2K } : undefined,
-    },
-  });
-
-  // Extract result
-  let resultBase64: string | null = null;
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData?.data) {
-      resultBase64 = part.inlineData.data;
-      break;
-    }
-  }
-
-  if (!resultBase64) {
-    throw new Error(`${passName} failed: No image generated`);
-  }
-
-  // Convert to PNG for lossless storage
-  const pngBase64 = await convertToPNG(resultBase64);
-  return `data:image/png;base64,${pngBase64}`;
-};
-
-/**
- * Orchestrates multi-pass global style transfer
- * Each pass focuses on a specific transformation type
- */
-const performMultiPassGlobalStyle = async (
-  initialImageBase64: string,
-  stylePlan: GlobalStylePlan,
-  referenceImageBase64: string,
-  preferredModelId: string,
-  onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
-): Promise<string> => {
-  console.log('[MultiPass] Starting orchestrated global style transfer');
-  
-  // Build pass configuration from style plan
-  const hasMaterials = stylePlan.application_strategy.materials_to_apply.length > 0;
-  const hasFurniture = (stylePlan.application_strategy.furniture_to_add.length > 0 || 
-                        stylePlan.application_strategy.furniture_to_replace.length > 0);
-
-  let currentImage = initialImageBase64;
-  let passNumber = 0;
-
-  // PASS 1: MATERIALS TRANSFORMATION
-  if (hasMaterials) {
-    passNumber++;
-    const passName = `Pass ${passNumber}: Materials`;
-    console.log(`[MultiPass] ${passName} (${stylePlan.application_strategy.materials_to_apply.length} surfaces)`);
-    
-    if (onPassUpdate) {
-      onPassUpdate(passNumber, passName, currentImage);
-    }
-    
-    const materialsPrompt = buildMaterialsPassPrompt(
-      stylePlan,
-      stylePlan.application_strategy.materials_to_apply,
-      referenceImageBase64
-    );
-
-    try {
-      currentImage = await executePass(
-        currentImage,
-        materialsPrompt,
-        referenceImageBase64,
-        preferredModelId,
-        passName
-      );
-      console.log(`[MultiPass] ${passName} completed successfully`);
-      if (onPassUpdate) {
-        onPassUpdate(passNumber, passName, currentImage);
-      }
-    } catch (passError) {
-      console.error(`[MultiPass] ${passName} failed:`, passError);
-      throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
-    }
-  }
-
-  // PASS 2: FURNITURE TRANSFORMATION
-  if (hasFurniture) {
-    passNumber++;
-    const passName = `Pass ${passNumber}: Furniture`;
-    console.log(`[MultiPass] ${passName}`);
-    
-    if (onPassUpdate) {
-      onPassUpdate(passNumber, passName, currentImage);
-    }
-    
-    const furniturePrompt = buildFurniturePassPrompt(
-      stylePlan,
-      stylePlan.application_strategy.furniture_to_add,
-      stylePlan.application_strategy.furniture_to_replace,
-      referenceImageBase64
-    );
-
-    try {
-      currentImage = await executePass(
-        currentImage,
-        furniturePrompt,
-        referenceImageBase64,
-        preferredModelId,
-        passName
-      );
-      console.log(`[MultiPass] ${passName} completed successfully`);
-      if (onPassUpdate) {
-        onPassUpdate(passNumber, passName, currentImage);
-      }
-    } catch (passError) {
-      console.error(`[MultiPass] ${passName} failed:`, passError);
-      throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
-    }
-  }
-
-  // PASS 3: DECOR & LIGHTING POLISH (always enabled)
-  passNumber++;
-  const passName = `Pass ${passNumber}: Decor`;
-  console.log(`[MultiPass] ${passName}`);
-  
-  if (onPassUpdate) {
-    onPassUpdate(passNumber, passName, currentImage);
-  }
-  
-  const decorPrompt = buildDecorPassPrompt(
-    stylePlan,
-    referenceImageBase64
-  );
-
-  try {
-    currentImage = await executePass(
-      currentImage,
-      decorPrompt,
-      referenceImageBase64,
-      preferredModelId,
-      passName
-    );
-    console.log(`[MultiPass] ${passName} completed successfully`);
-    if (onPassUpdate) {
-      onPassUpdate(passNumber, passName, currentImage);
-    }
-  } catch (passError) {
-    console.error(`[MultiPass] ${passName} failed:`, passError);
-    throw new Error(`Multi-pass failed at ${passName}: ${passError instanceof Error ? passError.message : String(passError)}`);
-  }
-
-  console.log(`[MultiPass] Completed ${passNumber} passes successfully`);
-  return currentImage;
-};
-
-/**
- * Performs image editing using Gemini (fallback method).
- * This is the original implementation preserved as fallback.
- * ALL YOUR EXISTING PROMPTS ARE KEPT HERE - NO CHANGES
+ * Performs image editing using Gemini API. Handles mode resolution, prompt building,
+ * reference image processing, and dimension validation.
  */
 const performGeminiEdit = async (
   currentImageBase64: string,
@@ -387,17 +151,13 @@ const performGeminiEdit = async (
   const apiKey = getApiKey();
   const ai = new GoogleGenAI({ apiKey });
 
-  // Use visual details if available (more specific for Gemini image model)
-  // Fallback to name if visual_details not available
   const subjectName = identifiedObject.visual_details || identifiedObject.name;
   const sourceCoords = identifiedObject.position;
   
-  // Get object description for better context
   const objectDescription = identifiedObject.visual_details 
     ? `${identifiedObject.name} (${identifiedObject.visual_details})`
     : identifiedObject.name;
 
-  // Build scene inventory for AI context
   const buildSceneInventory = (): string => {
     if (!allDetectedObjects || allDetectedObjects.length === 0) {
       return '';
@@ -421,36 +181,30 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
 `;
   };
 
-  /**
-   * FINAL CORRECTED APPROACH
-   *
-   * Combines:
-   * 1. Your aspect ratio preservation (ESSENTIAL - you were right)
-   * 2. Your alignment/carpenter mode logic (ESSENTIAL - you were right again)
-   * 3. Cleaner language without CAPS (my contribution)
-   * 4. Operation-specific prompts (my contribution)
-   */
+
+  const originalName = identifiedObject.name;
+  const isFurniture = /chair|sofa|table|bed|stool|seating|furniture|desk|bench|ottoman/i.test(originalName);
+  const isContainer = /shelf|shelves|cabinet|bookcase|rack|display|drawer/i.test(originalName);
+  const isSurface = /floor|flooring|wall|ceiling|counter|countertop|tabletop|desktop|worktop|surface|tile|parquet|concrete|backsplash/i.test(originalName);
+  const hasReferenceImage = !!referenceImageBase64 && !isOriginalImageReference;
+  
+  const editMode = resolveEditMode({
+    identifiedObject,
+    translation,
+    hasReferenceImage,
+    isFurniture,
+    isSurface,
+  });
+
+  const config = getImageEditingConfigForMode(preferredModelId, editMode);
+  const isGlobalStyle = identifiedObject.id === GLOBAL_CONTEXT_ID || 
+                       !identifiedObject.box_2d ||
+                       GLOBAL_STYLE_KEYWORDS.test(translation.proposed_action);
 
   const buildPrompt = async (isPro: boolean, stylePlan?: GlobalStylePlan): Promise<string> => {
-    // Object type detection (use original name for pattern matching)
-    const originalName = identifiedObject.name;
-    const isFurniture = /chair|sofa|table|bed|stool|seating|furniture/i.test(originalName);
-    const isContainer = /shelf|shelves|cabinet|bookcase|rack|display|drawer/i.test(originalName);
-    const isSurface = /counter|countertop|table|desk|worktop|surface/i.test(originalName);
-    
-    // Alignment edit detection (only for fix/align operations, NOT for moves)
     const isAlignmentFix = /align|height|flush|level|gap|fit/i.test(translation.proposed_action) && 
                            translation.operation_type !== 'MOVE';
-
-    // Check if this is a global/room-wide style change
-    const isGlobalStyle = identifiedObject.id === GLOBAL_CONTEXT_ID || 
-                         !identifiedObject.box_2d ||
-                         GLOBAL_STYLE_KEYWORDS.test(translation.proposed_action);
-
-    // Scene inventory
     const sceneInventory = buildSceneInventory();
-
-    // Build prompt using centralized prompt builder
     return buildEditingPrompt({
       objectDescription,
       sourceCoords,
@@ -467,22 +221,15 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
       referenceMaterialDescription,
       sceneInventory,
       stylePlan,
+      editMode,
     });
   };
 
   try {
     const isPro = preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO;
     
-    // Check if this is a global style edit with reference image - use reasoning analysis
-    const isGlobalStyle = identifiedObject.id === GLOBAL_CONTEXT_ID || 
-                         !identifiedObject.box_2d ||
-                         GLOBAL_STYLE_KEYWORDS.test(translation.proposed_action);
-    const hasReferenceImage = !!referenceImageBase64 && !isOriginalImageReference;
-    
-    
     let stylePlan: GlobalStylePlan | undefined;
     if (isGlobalStyle && hasReferenceImage) {
-      console.log('[ImageEdit] Performing reasoning-based analysis for global style edit...');
       try {
         const sceneInventory = buildSceneInventory();
         stylePlan = await analyzeGlobalStyleApplication(
@@ -491,90 +238,71 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
           spatialContext,
           sceneInventory
         );
-        console.log('[ImageEdit] Reasoning analysis complete');
-        
-        // Use single-pass for global style (3-pass disabled - simpler and more reliable)
-        console.log('[ImageEdit] Using single-pass for global style application');
       } catch (analysisError) {
-        console.warn('[ImageEdit] Reasoning analysis failed, proceeding without plan:', analysisError);
-        // Continue without plan - prompt will still work
+        // Continue without style plan if analysis fails
       }
     }
     
-    const prompt = await buildPrompt(isPro, stylePlan);
+    let inputDimensions: { width: number; height: number } | null = null;
+    if (editMode === 'OBJECT_REPLACEMENT' || editMode === 'SURFACE_REPLACEMENT') {
+      try {
+        inputDimensions = await getImageDimensions(`data:image/png;base64,${normalizeBase64(currentImageBase64)}`);
+      } catch (err) {
+        // Continue without dimension metadata if check fails
+      }
+    }
 
-    console.log('[ImageEdit] Editing...');
+    let prompt = await buildPrompt(isPro, editMode === 'GLOBAL_STYLE' ? stylePlan : undefined);
 
-    // Prepare images for API - PARALLEL conversion for performance
-    // LOSSLESS INTERMEDIATES: currentImageBase64 is PNG (lossless) from store
-    // Only convert to JPEG right before API call to prevent compression artifacts
+    if (inputDimensions && (editMode === 'OBJECT_REPLACEMENT' || editMode === 'SURFACE_REPLACEMENT')) {
+      prompt += `\n\nIMAGE DIMENSIONS (CRITICAL - EXACT PIXELS REQUIRED):
+Input image is EXACTLY ${inputDimensions.width} pixels wide × ${inputDimensions.height} pixels tall.
+Output MUST be EXACTLY ${inputDimensions.width}×${inputDimensions.height} pixels - not ${inputDimensions.width-1}, not ${inputDimensions.height+1}, EXACTLY ${inputDimensions.width}×${inputDimensions.height}.
+Do NOT change canvas size to 2048×2048 or any other size.
+The output canvas dimensions are LOCKED to ${inputDimensions.width}×${inputDimensions.height} pixels.`;
+    }
+
     interface ContentPart {
       inlineData?: { mimeType: string; data: string };
       text?: string;
     }
 
-    // Build parts array - reference image FIRST for better style application
+    const referenceImageForGeneration = (referenceImageBase64 && !isOriginalImageReference && editMode !== 'GLOBAL_STYLE')
+      ? referenceImageBase64
+      : null;
+    
     const parts: ContentPart[] = [];
-    
-    // Parallel image conversion for performance (high quality to prevent degradation)
     const conversionPromises: Promise<string>[] = [];
-    if (referenceImageBase64 && !isOriginalImageReference) {
-      conversionPromises.push(convertToJPEG(normalizeBase64(referenceImageBase64), 0.98)); // Higher quality
+    if (referenceImageForGeneration) {
+      conversionPromises.push(convertToJPEG(normalizeBase64(referenceImageForGeneration), 0.98));
     }
-    conversionPromises.push(convertToJPEG(normalizeBase64(currentImageBase64), 0.98)); // Higher quality
-    
-    // Wait for all conversions in parallel
+    conversionPromises.push(convertToJPEG(normalizeBase64(currentImageBase64), 0.98));
     const convertedImages = await Promise.all(conversionPromises);
     
-    // Current image FIRST (base), reference SECOND (style guide)
-    if (referenceImageBase64 && !isOriginalImageReference) {
-      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[1] } }); // CURRENT
-      parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[0] } }); // REFERENCE
-    } else {
+    parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[convertedImages.length - 1] } });
+    if (referenceImageForGeneration) {
       parts.push({ inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[0] } });
     }
     
-    // Prompt comes last
     parts.push({ text: prompt });
     
-    // Record edit asynchronously (non-blocking) after starting API call
-    // This is just for cache refresh counting, doesn't affect the edit
     setTimeout(() => recordEdit(), 0);
 
-    // Execute with model-appropriate settings
-    // LOWERED temperatures across the board to prevent hallucinations (logo generation, etc.)
-    const isInternalModify = translation.operation_type === 'INTERNAL_MODIFY';
-    const isRemoval = translation.operation_type === 'REMOVE';
-    const isGlobalStyleWithReference = isGlobalStyle && hasReferenceImage;
-    
-    // Temperature: Lower = more deterministic, less hallucination
-    // Higher temperature for global style edits to encourage comprehensive transformations
-    let temperature: number;
-    if (isInternalModify || isRemoval) {
-      temperature = isPro ? TEMPERATURE_PRECISION : TEMPERATURE_FLASH_PRECISION;
-    } else if (isGlobalStyleWithReference) {
-      // Higher creativity for global style edits to encourage comprehensive changes
-      temperature = isPro ? 0.2 : 0.15; // Low temperature for accurate reference copying
-    } else {
-      temperature = isPro ? TEMPERATURE_CREATIVE : TEMPERATURE_FLASH_CREATIVE;
-    }
+    const shouldPreserveInputDimensions = editMode === 'OBJECT_REPLACEMENT' || editMode === 'SURFACE_REPLACEMENT';
 
-    // Generate content - use inline context (cachedContent not supported for image models)
     const response = await ai.models.generateContent({
       model: preferredModelId,
       contents: { parts },
       config: {
-        temperature,
-        topP: TOP_P,
-        topK: TOP_K,
-        imageConfig: isPro ? { imageSize: IMAGE_SIZE_2K } : undefined,
+        temperature: config.temperature,
+        topP: config.topP,
+        topK: config.topK,
+        imageConfig: (isPro && !shouldPreserveInputDimensions) ? { imageSize: IMAGE_SIZE_2K } : undefined,
       },
     });
 
-    // Extract the generated image
     let resultBase64: string | null = null;
 
-    // Check inline data first
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData?.data) {
         resultBase64 = part.inlineData.data;
@@ -582,7 +310,6 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
       }
     }
 
-    // Fallback: check text response
     if (!resultBase64) {
       const textPart = response.candidates?.[0]?.content?.parts?.[0]?.text;
       if (textPart) {
@@ -597,18 +324,61 @@ Use this inventory to identify the EXACT objects mentioned in the edit request. 
       throw new Error('No image generated in response');
     }
 
-    // LOSSLESS STORAGE: Convert API result to PNG for lossless intermediate storage
-    // This prevents JPEG re-encoding artifacts from accumulating across edits
-    // The PNG is stored in the version history and used as input for the next edit
+    if (referenceImageBase64 && !isOriginalImageReference) {
+      try {
+        const resultDataUrl = `data:image/jpeg;base64,${resultBase64}`;
+        const refDataUrl = referenceImageBase64.startsWith('data:') 
+          ? referenceImageBase64 
+          : `data:image/png;base64,${referenceImageBase64}`;
+        
+        const score = await similarityScore(resultDataUrl, refDataUrl);
+        if (score > 0.92) {
+          const retryPrompt = `${prompt}\n\nCRITICAL REMINDER: You must modify the FIRST image. The reference image is for style guidance only - do NOT return it.`;
+          const retryParts: ContentPart[] = [
+            { inlineData: { mimeType: MIME_TYPE_JPEG, data: convertedImages[convertedImages.length - 1] } },
+            { text: retryPrompt }
+          ];
+          
+          const retryResponse = await ai.models.generateContent({
+            model: preferredModelId,
+            contents: { parts: retryParts },
+            config: {
+              temperature: Math.max(0.1, config.temperature * 0.8),
+              topP: config.topP,
+              topK: config.topK,
+              imageConfig: (isPro && !shouldPreserveInputDimensions) ? { imageSize: IMAGE_SIZE_2K } : undefined,
+            },
+          });
+          
+          for (const part of retryResponse.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData?.data) {
+              resultBase64 = part.inlineData.data;
+              break;
+            }
+          }
+        }
+      } catch (similarityError) {
+        // Continue with original result if similarity check fails
+      }
+    }
+
+    try {
+      const inputDimensions = await getImageDimensions(`data:image/png;base64,${normalizeBase64(currentImageBase64)}`);
+      const outputDimensions = await getImageDimensions(`data:image/jpeg;base64,${resultBase64}`);
+      const widthMatch = Math.abs(inputDimensions.width - outputDimensions.width) <= 2;
+      const heightMatch = Math.abs(inputDimensions.height - outputDimensions.height) <= 2;
+      // Dimension mismatch is logged but doesn't block the result
+    } catch (dimensionError) {
+      // Continue if dimension check fails
+    }
+
     const pngBase64 = await convertToPNG(resultBase64);
     return `data:image/png;base64,${pngBase64}`;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error(`Edit failed with ${preferredModelId}:`, errorMessage);
 
-    // Fallback to Flash model if Pro fails
     if (preferredModelId === GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO) {
-      console.log('Attempting fallback to Flash model...');
       return performGeminiEdit(
         currentImageBase64,
         translation,

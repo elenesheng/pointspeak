@@ -16,8 +16,7 @@ interface UseProactiveLearningProps {
 }
 
 /**
- * AUTOPILOT: Proactively suggests actions based on learned patterns
- * Uses existing learningStore patterns
+ * Proactively suggests actions based on learned patterns from user feedback.
  */
 export const useProactiveLearning = ({
   selectedObject,

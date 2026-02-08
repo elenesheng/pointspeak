@@ -1,4 +1,7 @@
-// Default mask dilation percentage (2%)
+/**
+ * Mask generation utilities for creating binary masks from bounding boxes.
+ * Supports single objects, multiple objects, and position-based masks for move operations.
+ */
 const DEFAULT_MASK_DILATION = 0.02;
 
 /**

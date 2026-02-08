@@ -68,7 +68,7 @@ function loadState(): void {
       };
     }
   } catch (e) {
-    console.warn('[Gemini Cache] Failed to load state:', e);
+    // Failed to load state, will start fresh
   }
 }
 
@@ -82,13 +82,8 @@ function saveState(): void {
       cacheName: cacheState.cacheName || null,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-    console.log('[Gemini Cache] State saved:', {
-      learningCount: cacheState.learnings.length,
-      cacheName: cacheState.cacheName ? 'exists' : 'null',
-      editsSinceRefresh: cacheState.editsSinceRefresh
-    });
   } catch (e) {
-    console.warn('[Gemini Cache] Failed to save state:', e);
+    // Failed to save state
   }
 }
 
@@ -117,8 +112,6 @@ export function addLearning(learning: Omit<CachedLearning, 'timestamp' | 'weight
   cacheState.cacheName = null;
   cacheState.cacheModel = null;
   saveState();
-  
-  console.log(`[Gemini Cache] Added learning: ${learning.type} - ${learning.operation}`);
 }
 
 /**
@@ -261,12 +254,7 @@ function modelSupportsCaching(model: string): boolean {
  * @param model - The model name that will be used (cache model must match)
  */
 export async function getGeminiCacheName(model: string, nonBlocking: boolean = false): Promise<string | null> {
-  // Check if model supports caching
-  // Image-specific models (gemini-3-pro-image-preview, gemini-3-flash-image) don't support caching
-  // This is a Google API limitation - we must use inline context for these models
   if (!modelSupportsCaching(model)) {
-    console.log(`[Gemini Cache] Model ${model} doesn't support server-side caching (image models limitation). Using inline context instead.`);
-    // Clear any stale cache name to prevent confusion
     if (cacheState.cacheName) {
       cacheState.cacheName = null;
       cacheState.cacheModel = null;
@@ -285,37 +273,16 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
                         !needsRefresh();
   
   if (canReuseCache) {
-    console.log('[Gemini Cache] ✓ Reusing existing cache:', cacheState.cacheName, {
-      model: model,
-      editsSinceRefresh: cacheState.editsSinceRefresh,
-      age: Math.round((Date.now() - cacheState.lastRefreshTime) / 1000) + 's'
-    });
     return cacheState.cacheName;
   }
   
-  // If cache exists but model doesn't match or doesn't support caching, clear it
   if (cacheState.cacheName && (cacheState.cacheModel !== model || !modelSupportsCaching(model))) {
-    console.log('[Gemini Cache] Clearing cache - model mismatch or unsupported:', {
-      cachedModel: cacheState.cacheModel,
-      currentModel: model,
-      supportsCaching: modelSupportsCaching(model)
-    });
     cacheState.cacheName = null;
     cacheState.cacheModel = null;
     saveState();
   }
   
-  // Log why we're refreshing (if we need to)
-  const needsRefreshResult = needsRefresh();
-  if (needsRefreshResult) {
-    const reasons = [];
-    if (!cacheState.cacheName) reasons.push('no cache exists');
-    if (cacheState.editsSinceRefresh >= CACHE_CONFIG.refreshAfterEdits) reasons.push(`${cacheState.editsSinceRefresh} edits (limit: ${CACHE_CONFIG.refreshAfterEdits})`);
-    if (cacheState.lastRefreshTime > 0 && Date.now() - cacheState.lastRefreshTime > CACHE_CONFIG.maxAgeMs) reasons.push('cache too old');
-    if (reasons.length > 0) {
-      console.log('[Gemini Cache] ⟳ Refreshing cache. Reasons:', reasons.join(', '));
-    }
-  }
+  needsRefresh();
 
   // Build new context
   const contextString = buildContextString();
@@ -323,11 +290,7 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
   // Estimate token count (rough: 1 token ≈ 4 characters)
   const estimatedTokens = Math.ceil(contextString.length / 4);
   
-  // EARLY EXIT: Gemini requires minimum 1024 tokens for cache creation
-  // If context is too small, skip caching (not worth it)
   if (estimatedTokens < 1024) {
-    console.log(`[Gemini Cache] Context too small (${estimatedTokens} tokens, need 1024), skipping cache creation. Using inline context.`);
-    // If we have an existing cache for this model, keep using it
     if (cacheState.cacheName && cacheState.cacheModel === model) {
       return cacheState.cacheName;
     }
@@ -335,20 +298,14 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
   }
 
   try {
-    // Delete old cache if exists (cleanup)
     if (cacheState.cacheName) {
       try {
         await ai.caches.delete({ name: cacheState.cacheName });
-        console.log('[Gemini Cache] Deleted old cache');
       } catch (e) {
         // Cache may have expired, ignore
-        console.log('[Gemini Cache] Old cache already expired or not found');
       }
     }
 
-    // Create new cached content using Gemini's API
-    // Based on SDK: config contains contents, displayName, systemInstruction, ttl
-    // IMPORTANT: Model must match the model used in generateContent calls
     const cacheResponse = await ai.caches.create({
       model: model,
       config: {
@@ -361,38 +318,20 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
       }
     });
 
-    // Extract cache name/resource name
     const cacheName = cacheResponse.name || null;
-
-    // Update state
     cacheState.cacheName = cacheName;
-    cacheState.cacheModel = model; // Track which model this cache is for
+    cacheState.cacheModel = model;
     cacheState.editsSinceRefresh = 0;
     cacheState.lastRefreshTime = Date.now();
     cacheState.version++;
     saveState();
 
-    console.log('[Gemini Cache] Created new cache:', cacheName);
     return cacheName;
 
   } catch (error: any) {
-    const errorMessage = error?.message || String(error);
-    
-    // Don't spam logs for expected failures (model doesn't support caching)
-    if (errorMessage.includes('not supported') || 
-        errorMessage.includes('not found') ||
-        error?.status === 404 ||
-        errorMessage.includes('INVALID_ARGUMENT')) {
-      console.log(`[Gemini Cache] Model doesn't support caching (expected): ${errorMessage.slice(0, 100)}`);
-    } else {
-      console.warn('[Gemini Cache] Failed to create cache:', errorMessage);
-    }
-    
-    // Clear stale cache name
     cacheState.cacheName = null;
     cacheState.cacheModel = null;
     saveState();
-    
     return null;
   }
 }
@@ -412,7 +351,6 @@ export function invalidateCache(): void {
   cacheState.cacheName = null;
   cacheState.cacheModel = null;
   saveState();
-  console.log('[Gemini Cache] Invalidated - will refresh on next request');
 }
 
 /**
@@ -428,7 +366,6 @@ export function clearLearnings(): void {
     version: 0,
   };
   saveState();
-  console.log('[Gemini Cache] Cleared all learnings');
 }
 
 /**

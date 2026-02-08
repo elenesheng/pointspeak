@@ -1,4 +1,6 @@
-
+/**
+ * Hook to detect clicks outside a referenced element.
+ */
 import { useEffect, RefObject } from 'react';
 
 export const useClickOutside = (ref: RefObject<HTMLElement | null>, handler: () => void) => {

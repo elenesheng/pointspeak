@@ -1,3 +1,6 @@
+/**
+ * Error handling utilities for mapping API errors to user-friendly messages.
+ */
 export type AppErrorType = 'RATE_LIMIT' | 'BILLING' | 'NETWORK' | 'UNKNOWN';
 
 export class AppError extends Error {

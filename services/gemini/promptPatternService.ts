@@ -63,10 +63,7 @@ OUTPUT: A concise description of the failure pattern and what to avoid (max 100 
       operation: operationType,
       description: analysis,
     });
-
-    console.log(`[Prompt Pattern] ${wasSuccessful ? 'Success' : 'Failure'} pattern learned for ${operationType}:`, analysis);
   } catch (error) {
-    console.warn('[Prompt Pattern] Failed to analyze pattern:', error);
     // Fallback: Store basic pattern without analysis
     addLearning({
       type: wasSuccessful ? 'success' : (failureReason || 'quality') as 'hallucination' | 'quality' | 'style',

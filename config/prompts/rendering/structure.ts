@@ -27,24 +27,26 @@ export const buildRenderingSystemPrompt = (params: RenderingPromptParams): strin
 - Room boundaries: Keep dimensions and proportions consistent
 - Furniture: Preserve positions and orientations
 - Update only: Materials, colors, textures, lighting`
-    : `GEOMETRY (VISUALLY CONSISTENT WITH PLAN):
-- Structural mask (white=walls) guides wall layout - should broadly match the plan
-- Wall layout should be visually consistent with the plan structure
-- Floor plan indicates doors/windows - render where plan clearly shows them
-- Maintain spatial relationships - no new rooms or major partitions
-- Do not add new openings (windows/doors) unless shown clearly in the plan
-- Minor visual adjustments for photographic coherence are acceptable`;
+    : `GEOMETRY (STRICT - MATCH THE PLAN):
+- Structural mask (white=walls) defines wall positions - follow them precisely
+- Wall layout MUST match the plan structure - same number of walls, same positions
+- OPENINGS RULE: ONLY render doors/windows where the floor plan CLEARLY and UNAMBIGUOUSLY shows them
+- If a wall appears SOLID in the plan (no gap, no opening symbol), it MUST remain a SOLID WALL - do NOT add windows or doors
+- Do NOT invent openings for "natural light" or "aesthetic" reasons - solid walls stay solid
+- Maintain spatial relationships - no new rooms, no extra partitions, no invented spaces
+- The number of rooms in the 3D render must match the floor plan`;
 
   return `ACT AS: A Professional Interior Photographer.
 
 ${isAlreadyVisualized ? `
 TASK: Re-render existing 3D visualization. Update materials, lighting, finishes. Preserve geometry faithfully.
 ` : `
-TASK: Generate a visually coherent 3D interpretation of this floor plan.
+TASK: Generate a 3D interior photograph that faithfully follows this floor plan.
 - Photographer standing INSIDE room at eye level (1.6m)
 - Floor plan = spatial map; output = 3D perspective view
-- Create a visually plausible 3D space that is consistent with the plan structure
-- Wall layout should broadly match the plan - no new rooms or major partitions
+- Wall positions and openings must match the plan exactly
+- Do NOT invent windows, doors, or openings that are not clearly shown in the plan
+- Solid walls in the plan MUST remain solid walls in the 3D render
 `}
 
 CAMERA & PERSPECTIVE:
@@ -86,16 +88,17 @@ Note: Detected objects: ${detectedObjects.map(o => o.name).join(', ')}
 `}
 
 PRIORITY:
-1. Visual plausibility and photographic coherence
-2. Wall layout should be visually consistent with the plan (not pixel-perfect)
+1. Faithful wall layout matching the plan - solid walls stay solid, openings only where shown
+2. Visual plausibility and photographic coherence
 3. Reference image is style-only (if present)
-4. If uncertain, omit rather than guess
+4. If uncertain about openings, keep wall SOLID
 
 LIGHTING:
-- Primary: From window positions (if present)
-- Secondary: Realistic interior lighting
+- Primary: Ceiling-mounted overhead lighting (ambient from above)
+- Secondary: Through window/door openings (only if they exist in the plan)
+- All light sources come from CEILING or from existing openings - never from solid walls
 
-Output: Professional interior photograph with correct perspective.`;
+Output: Professional interior photograph with correct perspective and faithful layout.`;
 };
 
 export const getRenderingInstruction = (isAlreadyVisualized: boolean, referenceBase64: string | null, strictMode: boolean = false): string => {
@@ -126,16 +129,19 @@ CAMERA:
 Output: Corrected 3D structure maintaining visual coherence.`;
   }
 
-  return `Translate 2D plan into a visually coherent 3D interior photograph.
+  return `Translate 2D plan into a faithful 3D interior photograph.
 
-STRUCTURE:
-- Mask (white=walls) guides wall layout - should be visually consistent with the plan
+STRUCTURE (STRICT):
+- Mask (white=walls) defines EXACT wall positions - follow precisely
 - Translate 2D structure into 3D space with proper depth and perspective
-- Wall layout should broadly match the plan - no new rooms or major partitions
-- Minor visual adjustments for photographic coherence are acceptable
+- Wall positions must match the plan - no new rooms, no extra partitions
+- Do NOT change the layout or add spaces not in the plan
 
-OPENINGS:
-Render windows/doors where the floor plan clearly indicates them. If uncertain, keep walls solid (do not invent openings).
+OPENINGS (CRITICAL):
+- ONLY render windows/doors where the floor plan CLEARLY shows them (gaps, opening symbols)
+- If a wall is SOLID in the plan, it MUST be a SOLID WALL in the 3D render
+- Do NOT invent windows or doors for aesthetics or lighting - if uncertain, keep wall SOLID
+- When in doubt: SOLID WALL, never an opening.
 
 FURNITURE (SCALE ANCHORS):
 - Include basic structural furniture: one main seating element and one table/surface

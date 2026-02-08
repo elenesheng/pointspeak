@@ -128,6 +128,15 @@ export const MODEL_PRESETS = {
 export type PresetName = keyof typeof MODEL_PRESETS;
 
 /**
+ * Edit mode types - canonical modes for image editing
+ */
+export type EditMode =
+  | 'GLOBAL_STYLE'
+  | 'OBJECT_REPLACEMENT'
+  | 'SURFACE_REPLACEMENT'
+  | 'MINOR_EDIT';
+
+/**
  * Operation-specific preset mapping
  */
 export const OPERATION_PRESETS: Record<string, PresetName> = {
@@ -166,7 +175,84 @@ export function getPresetForOperation(operation: string): ModelPreset {
 }
 
 /**
- * Get image editing config based on model and operation
+ * Edit mode presets - temperature and sampling bound to mode
+ */
+export const EDIT_MODE_PRESETS = {
+  GLOBAL_STYLE: {
+    pro: {
+      temperature: 0.18,
+      topP: 0.85,
+      topK: 25,
+      description: 'Scene-wide style transfer, controlled creativity (lower temp to prevent reference return)',
+    },
+    flash: {
+      temperature: 0.15,
+      topP: 0.85,
+      topK: 25,
+      description: 'Scene-wide style transfer, controlled creativity (Flash)',
+    },
+    description: 'Scene-wide style transfer, controlled creativity',
+  },
+
+  OBJECT_REPLACEMENT: {
+    pro: MODEL_PRESETS.PRO_PRECISION,
+    flash: MODEL_PRESETS.FLASH_PRECISION,
+    description: 'Hard delete + insert, no blending',
+  },
+
+  SURFACE_REPLACEMENT: {
+    pro: {
+      temperature: 0.12,
+      topP: 0.85,
+      topK: 25,
+      description: 'Material system replacement (floors, walls)',
+    },
+    flash: {
+      temperature: 0.1,
+      topP: 0.85,
+      topK: 25,
+      description: 'Material system replacement (Flash)',
+    },
+  },
+
+  MINOR_EDIT: {
+    pro: {
+      temperature: 0.25,
+      topP: 0.85,
+      topK: 25,
+      description: 'Small visual edits',
+    },
+    flash: {
+      temperature: 0.2,
+      topP: 0.85,
+      topK: 25,
+      description: 'Small visual edits',
+    },
+  },
+} as const;
+
+/**
+ * Get image editing config based on model and edit mode
+ * This replaces the old operation-based config
+ */
+export function getImageEditingConfigForMode(
+  modelId: string,
+  editMode: EditMode
+): { temperature: number; topP: number; topK: number } {
+  const isPro = modelId.includes('pro');
+  const preset = EDIT_MODE_PRESETS[editMode];
+
+  const config = isPro ? preset.pro : preset.flash;
+  return {
+    temperature: config.temperature,
+    topP: config.topP || 0.85,
+    topK: config.topK || 25,
+  };
+}
+
+/**
+ * @deprecated Use getImageEditingConfigForMode instead
+ * Kept for backward compatibility
  */
 export function getImageEditingConfig(
   modelId: string,

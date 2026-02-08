@@ -76,6 +76,9 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastAnalyzedImageHash, setLastAnalyzedImageHash] = useState<string | null>(null);
 
+  // Track attempted fix prompts for self-correction
+  const attemptedFixesRef = useRef<Array<{ prompt: string; timestamp: number }>>([]);
+
   // Style Cards State for 2D Floor Plans
   const [styleCards, setStyleCards] = useState<FloorPlanStyle[]>([]);
   const [hasAppliedStyle, setHasAppliedStyle] = useState(false);
@@ -119,16 +122,14 @@ const App: React.FC = () => {
           try {
             setApiKeySelected(await window.aistudio.hasSelectedApiKey());
           } catch (e) {
-            console.warn('aistudio.hasSelectedApiKey() failed:', e);
-            setApiKeySelected(true); // Default to true if check fails
+            setApiKeySelected(true);
           }
         } else {
           const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
           setApiKeySelected(!!apiKey || true);
         }
       } catch (e) {
-        console.error('Error checking API key:', e);
-        setApiKeySelected(true); // Default to true to allow app to load
+        setApiKeySelected(true);
       } finally {
         setIsKeyChecking(false);
       }
@@ -200,24 +201,30 @@ const App: React.FC = () => {
       
       try {
         const learningContext = learningStore.getLearningContext();
+        const recentAttempts = attemptedFixesRef.current
+          .filter(a => Date.now() - a.timestamp < 60 * 60 * 1000)
+          .map(a => a.prompt);
         const analysis = await analyzeImageQuality(
-          activeBase64, 
+          activeBase64,
           roomAnalysis.is_2d_plan || false,
-          learningContext
+          learningContext,
+          recentAttempts.length > 0 ? recentAttempts : undefined
         );
-        
+
         setQualityAnalysis(analysis);
         setLastAnalyzedImageHash(imageHash);
         lastBackgroundImageHash.current = imageHash;
       } catch (error) {
-        console.warn('[Background Analysis] Failed:', error);
+        // Background analysis failed, continue silently
       } finally {
         backgroundAnalysisRef.current = false;
       }
     };
     
-    // Run immediately (no delay) so data is ready when user clicks
-    runBackgroundAnalysis();
+    // Delay background analysis to avoid 429 rate limits from Gemini
+    // Room analysis + object detection fire first, this runs after they settle
+    const timer = setTimeout(runBackgroundAnalysis, 5000);
+    return () => clearTimeout(timer);
   }, [imageUrl, generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore, editHistory.length]);
 
   useEffect(() => {
@@ -239,21 +246,23 @@ const App: React.FC = () => {
     // Skip if already generating or already running
     if (isGeneratingSuggestions || backgroundAssistantRef.current) return;
     
-    // Run assistant generation immediately (no delay) so data is ready when user clicks
+    // Delay background assistant to avoid 429 rate limits
+    // Runs after room analysis + object detection + quality analysis have settled
     const runBackgroundAssistant = async () => {
-      if (backgroundAssistantRef.current) return; // Already running
+      if (backgroundAssistantRef.current) return;
       backgroundAssistantRef.current = true;
-      
+
       try {
         await generateIdeas(activeBase64, roomAnalysis, scannedObjects, 'auto-refresh', false, hasAppliedStyle);
       } catch (error) {
-        console.warn('[Background Assistant] Failed:', error);
+        // Background assistant failed, continue silently
       } finally {
         backgroundAssistantRef.current = false;
       }
     };
-    
-    runBackgroundAssistant();
+
+    const timer = setTimeout(runBackgroundAssistant, 8000);
+    return () => clearTimeout(timer);
   }, [generatedImage, roomAnalysis, scannedObjects.length, isAssistantOpen, showAnalysis, isGeneratingSuggestions, generateIdeas]);
 
   const handleConnectKey = async () => {
@@ -274,6 +283,7 @@ const App: React.FC = () => {
     setUserInput('');
     setShowAnalysis(false);
     setQualityAnalysis(null);
+    attemptedFixesRef.current = [];
     setStyleCards([]);
     setHasAppliedStyle(false);
     setIsAssistantOpen(false);
@@ -295,30 +305,17 @@ const App: React.FC = () => {
     const activeBase64 = getActiveBase64();
     if (!activeBase64) return;
 
-    if (pins.length === 1 && isProcessing) {
-       addLog('Wait for source identification before setting target.', 'error');
-       return;
-    }
-    
     if (isProcessing && status !== 'Ready') return;
 
     const x = ((e.clientX - rect.left) / rect.width) * 1000;
     const y = ((e.clientY - rect.top) / rect.height) * 1000;
-    
+
+    // SINGLE-CLICK MODE: Every click identifies a new source object
+    // No second click for target - user will use text commands instead
     addPin({ x, y });
-
-    if (pins.length === 0 || pins.length === 2) {
-       if (pins.length === 2) {
-           setSelectedObject(null);
-           addLog(`Resetting. New source at: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
-       } else {
-           addLog(`Source identified: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
-       }
-       await identifyObjectAtLocation(activeBase64, x, y);
-
-    } else if (pins.length === 1) {
-       addLog(`Target location set: [${x.toFixed(0)}, ${y.toFixed(0)}]. Ready for command.`, 'action');
-    }
+    setSelectedObject(null);
+    addLog(`Source identified: [${x.toFixed(0)}, ${y.toFixed(0)}]`, 'action');
+    await identifyObjectAtLocation(activeBase64, x, y);
   };
 
   const handleObjectSelect = (obj: IdentifiedObject) => {
@@ -338,12 +335,10 @@ const App: React.FC = () => {
     const textToSend = (textOverride && textOverride.trim()) || userInput;
     
     if (!activeBase64) {
-      console.error('[handleSend] No active base64');
       return;
     }
     
     if (!textToSend?.trim() && !overrideData) {
-      console.error('[handleSend] No text to send and no override data', { textOverride, userInput, textToSend });
       return;
     }
 
@@ -483,12 +478,19 @@ const App: React.FC = () => {
     addLog('🔍 Running quality analysis...', 'analysis');
 
     try {
-      // Get learning context for analysis
+      // Get learning context for analysis (includes style preferences, failures, warnings)
       const learningContext = learningStore.getLearningContext();
+
+      // Build self-correction context from previously attempted fixes
+      const recentAttempts = attemptedFixesRef.current
+        .filter(a => Date.now() - a.timestamp < 60 * 60 * 1000) // last hour
+        .map(a => a.prompt);
+
       const analysis = await analyzeImageQuality(
-        activeBase64, 
+        activeBase64,
         roomAnalysis?.is_2d_plan || false,
-        learningContext
+        learningContext,
+        recentAttempts.length > 0 ? recentAttempts : undefined
       );
       setQualityAnalysis(analysis);
       setLastAnalyzedImageHash(imageHash);
@@ -511,6 +513,14 @@ const App: React.FC = () => {
   };
 
   const handleApplyFix = (fixPrompt: string) => {
+    // Track this fix attempt for self-correction on next analysis
+    attemptedFixesRef.current.push({ prompt: fixPrompt, timestamp: Date.now() });
+    // Keep only last 5 attempts
+    if (attemptedFixesRef.current.length > 5) {
+      attemptedFixesRef.current = attemptedFixesRef.current.slice(-5);
+    }
+    // Invalidate analysis cache so next open re-analyzes with self-correction context
+    setLastAnalyzedImageHash(null);
     setShowAnalysis(false);
     setUserInput(fixPrompt);
     addLog(`🔧 Fix loaded: ${fixPrompt.slice(0, 50)}...`, 'action');
@@ -533,9 +543,9 @@ const App: React.FC = () => {
         analyzePromptPattern(
           lastEditDescription,
           operationType,
-          true // successful
-        ).catch(err => {
-          console.warn('[Background] Prompt pattern analysis failed:', err);
+          true
+        ).catch(() => {
+          // Pattern analysis failed, continue silently
         });
       }, 0);
     }
@@ -574,10 +584,10 @@ const App: React.FC = () => {
         analyzePromptPattern(
           lastEditDescription,
           operationType,
-          false, // failed
+          false,
           failureReason
-        ).catch(err => {
-          console.warn('[Background] Prompt pattern analysis failed:', err);
+        ).catch(() => {
+          // Pattern analysis failed, continue silently
         });
       }, 0);
     }
@@ -960,6 +970,7 @@ const App: React.FC = () => {
         onClose={() => setShowAnalysis(false)}
         onApplyFix={handleApplyFix}
         isLoading={isAnalyzing}
+        previousAttemptCount={attemptedFixesRef.current.filter(a => Date.now() - a.timestamp < 60 * 60 * 1000).length}
       />
 
       {/* Edit Feedback Prompt - appears after each direct edit */}

@@ -5,14 +5,11 @@ import { Coordinate } from '../types/spatial.types';
 export const usePinManagement = () => {
   const [pins, setPins] = useState<Coordinate[]>([]);
 
+  /**
+   * Manages pin coordinates for object selection. Single-click mode replaces previous pin.
+   */
   const addPin = useCallback((coord: Coordinate) => {
-    setPins(prev => {
-      if (prev.length === 2) {
-        // Reset if we already have a vector, start new source
-        return [coord];
-      }
-      return [...prev, coord];
-    });
+    setPins(prev => [coord]);
   }, []);
 
   const resetPins = useCallback(() => setPins([]), []);

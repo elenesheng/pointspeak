@@ -322,12 +322,10 @@ export const useFullAutopilot = ({
                       // Small delay between fixes to ensure store is updated
                       // NO RE-ANALYSIS - we're using the saved issues list
                       await new Promise(resolve => setTimeout(resolve, 1000));
-                    } catch (error) {
-                      if (cancelRef.current) break;
-                      console.error('[Autopilot] Fix failed:', error);
-                      addLog(`  ❌ Fix ${fixIndex + 1} failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-                      // Continue with next fix even if this one failed
-                    }
+            } catch (error) {
+              if (cancelRef.current) break;
+              addLog(`  ❌ Fix ${fixIndex + 1} failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            }
                   }
                   
                   if (!cancelRef.current) {
@@ -341,7 +339,6 @@ export const useFullAutopilot = ({
               }
             }
           } catch (error) {
-            console.warn('[Autopilot] Quality analysis failed:', error);
             addLog(`  ⚠️ Quality analysis skipped`, 'warning');
           }
         } else if (!config.enabled) {

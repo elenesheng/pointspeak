@@ -123,13 +123,7 @@ export const generateMultiAngleRender = async (
       try {
         const validation = await validateRenderingTopology(pngBase64, planBase64, maskBase64);
         
-        // Only retry on CRITICAL violations: new openings or walls added/removed
-        // Do NOT retry on minor shifts, wall thickness variance, or corner rounding
         if (validation.new_openings || (validation.wall_changes && validation.topology_changed)) {
-          console.log('[Render] Critical topology violation detected:', validation);
-          console.log('[Render] Retrying with previous image as anchor...');
-          
-          // Retry with previous image as anchor (add information, don't remove)
           return generateMultiAngleRender(
             planBase64,
             maskBase64,
@@ -137,14 +131,12 @@ export const generateMultiAngleRender = async (
             styleDescription,
             detectedObjects,
             isAlreadyVisualized,
-            true, // retryMode
-            jpegBase64 // Pass previous image as anchor
+            true,
+            jpegBase64
           );
-        } else {
-          console.log('[Render] Topology validation passed - minor adjustments acceptable');
         }
       } catch (validationError) {
-        console.warn('[Render] Topology validation failed, but continuing with result:', validationError);
+        // Continue with result if validation fails
       }
     }
     
@@ -231,10 +223,7 @@ export const generateMultiStageRender = async (
   const stage1Image = extractBase64(stage1Response);
   const stage1Base64 = normalizeBase64(stage1Image);
 
-  // STAGE 2: Apply Style (in retry mode, use previous image as anchor)
   if (retryMode && previousImageBase64) {
-    console.log('[Render] Retry mode: Using previous image as anchor for corrections');
-    // Use previous image as first input to preserve what's correct
     const stage2Parts: ContentPart[] = [
       { inlineData: { mimeType: 'image/jpeg', data: previousImageBase64 } }, // Previous image as anchor
       { inlineData: { mimeType: 'image/jpeg', data: stage1Base64 } }, // Corrected structure
@@ -267,8 +256,6 @@ export const generateMultiStageRender = async (
     return [`data:image/png;base64,${pngBase64}`];
   }
 
-  console.log('[Render] Stage 2: Applying style and details...');
-  
   const stylePrompt = buildStage2StylePrompt({
     styleDescription,
     objectContext,
@@ -308,13 +295,7 @@ export const generateMultiStageRender = async (
     try {
       const validation = await validateRenderingTopology(pngBase64, planBase64, maskBase64);
       
-      // Only retry on CRITICAL violations: new openings or walls added/removed
-      // Do NOT retry on minor shifts, wall thickness variance, or corner rounding
       if (validation.new_openings || (validation.wall_changes && validation.topology_changed)) {
-        console.log('[Render] Critical topology violation detected:', validation);
-        console.log('[Render] Retrying with previous image as anchor...');
-        
-        // Retry with previous image as anchor (add information, don't remove)
         return generateMultiStageRender(
           planBase64,
           maskBase64,
@@ -322,14 +303,12 @@ export const generateMultiStageRender = async (
           styleDescription,
           detectedObjects,
           isAlreadyVisualized,
-          true, // retryMode
-          stage1Base64 // Pass stage 1 result as anchor
+          true,
+          stage1Base64
         );
-      } else {
-        console.log('[Render] Topology validation passed - minor adjustments acceptable');
       }
     } catch (validationError) {
-      console.warn('[Render] Topology validation failed, but continuing with result:', validationError);
+      // Continue with result if validation fails
     }
   }
   

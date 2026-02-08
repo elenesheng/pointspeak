@@ -1,3 +1,7 @@
+/**
+ * Learning store for tracking user preferences, successful patterns, and failure patterns.
+ * Persists learned data across sessions to improve AI behavior over time.
+ */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { DesignSuggestion } from '../types/ai.types';
@@ -73,6 +77,7 @@ interface LearningState {
     avoidedActions: string[];
     contextualInsights: string;
     warningsForAI: string[];
+    recentFailures: string[];
   };
   getPreferenceScore: (style: string) => number;
   getFailureStats: () => { hallucinations: number; quality: number; style: number; total: number };
@@ -213,13 +218,12 @@ export const useLearningStore = create<LearningState>()(
             patterns.failures = patterns.failures.slice(-30);
           }
 
-          // SMART CACHE: Add to bounded cache and invalidate
           addLearning({
             type: reason === 'hallucination' ? 'hallucination' : reason === 'quality' ? 'quality' : 'style',
             operation: extractedKeywords[0] || 'EDIT',
             description: action.slice(0, 100),
           });
-          invalidateCache(); // Force refresh on next request
+          invalidateCache();
 
           return { patterns };
         });
@@ -237,7 +241,6 @@ export const useLearningStore = create<LearningState>()(
             patterns.successfulPatterns = patterns.successfulPatterns.slice(-50);
           }
 
-          // SMART CACHE: Add success to cache (lower priority, no invalidate)
           addLearning({
             type: 'success',
             operation: 'EDIT',
@@ -280,13 +283,12 @@ export const useLearningStore = create<LearningState>()(
 
           patterns.totalDislikes += 1;
 
-          // SMART CACHE: Add to bounded cache and force refresh
           addLearning({
             type: reason === 'hallucination' ? 'hallucination' : reason === 'quality' ? 'quality' : 'style',
             operation: 'EDIT',
             description: editDescription.slice(0, 100),
           });
-          invalidateCache(); // Force refresh on next request
+          invalidateCache();
 
           // Keep only last 100 edits
           if (patterns.editHistory.length > 100) {
@@ -382,55 +384,54 @@ export const useLearningStore = create<LearningState>()(
         const patterns = state.patterns;
         const warningsForAI: string[] = [];
 
-        // SMART FILTERING: Only include relevant warnings based on operation type
-        const isStyleOp = operationType === 'STYLE';
         const isRemoveOp = operationType === 'REMOVE';
-        const isMoveOp = operationType === 'MOVE';
 
-        // Hallucination warnings - relevant for MOVE, EDIT, ADD (not REMOVE)
         if (patterns.hallucinationCount >= 3 && !isRemoveOp) {
           warningsForAI.push('Be precise. User reported unwanted changes in past edits.');
         }
 
-        // Quality warnings - relevant for all operations
         if (patterns.qualityIssueCount >= 3) {
           warningsForAI.push('Prioritize output quality.');
         }
 
-        // Style warnings - ONLY for style operations
-        if (isStyleOp && patterns.styleMismatchCount >= 2 && patterns.likedStyles.length > 0) {
+        // Always include style preferences - analysis and suggestions need them
+        if (patterns.styleMismatchCount >= 2 && patterns.likedStyles.length > 0) {
           warningsForAI.push(`Preferred styles: ${patterns.likedStyles.slice(0, 3).join(', ')}`);
         }
 
-        // Recent failures - only include if threshold met AND relevant
         const recentFailures = patterns.failures.filter(
-          (f) => Date.now() - f.timestamp < 30 * 60 * 1000 // Last 30 minutes only
+          (f) => Date.now() - f.timestamp < 30 * 60 * 1000
         );
-        
+
         if (recentFailures.length >= 2) {
-          const relevantFailures = recentFailures.filter((f) => {
-            // Match failure to current operation type
-            if (isRemoveOp) return f.operationType === 'REMOVE';
-            if (isStyleOp) return f.operationType === 'STYLE';
-            if (isMoveOp) return f.operationType === 'MOVE';
-            return true; // Include all for other operations
-          });
-          
+          const relevantFailures = operationType
+            ? recentFailures.filter((f) => f.operationType === operationType)
+            : recentFailures;
+
           if (relevantFailures.length > 0) {
             warningsForAI.push(`Recent issues: ${relevantFailures[0].reason}`);
           }
         }
 
-        // LIMIT: Max 2 warnings to avoid overwhelming
-        const limitedWarnings = warningsForAI.slice(0, 2);
+        // Build recent failure details for self-correction
+        const recentFailureDetails = recentFailures.slice(-5).map(f =>
+          `"${f.action}" failed (${f.reason})${f.context ? `: ${f.context}` : ''}`
+        );
+
+        const limitedWarnings = warningsForAI.slice(0, 3);
 
         return {
-          // Style preferences only for STYLE operations
-          stylePreferences: isStyleOp ? patterns.likedStyles.slice(0, 3) : [],
-          // Avoided actions limited
+          // Always return style preferences regardless of operation type
+          stylePreferences: patterns.likedStyles.slice(0, 5),
           avoidedActions: patterns.avoidedActions.slice(0, 3),
-          contextualInsights: '',
+          // Build contextual insights inline (liked/disliked styles, room prefs, recent failures)
+          contextualInsights: [
+            patterns.likedStyles.length > 0 ? `User prefers: ${patterns.likedStyles.slice(0, 4).join(', ')}` : '',
+            patterns.dislikedStyles.length > 0 ? `Avoid styles: ${patterns.dislikedStyles.slice(0, 3).join(', ')}` : '',
+            recentFailures.length > 0 ? `Recent failures: ${recentFailures.slice(-3).map(f => f.reason).join('; ')}` : '',
+          ].filter(Boolean).join('. '),
           warningsForAI: limitedWarnings,
+          recentFailures: recentFailureDetails,
         };
       },
 
@@ -453,22 +454,18 @@ export const useLearningStore = create<LearningState>()(
       },
 
       clearSessionData: () => {
-        // Clear session-specific data but keep learned preferences
         set((state) => ({
           patterns: {
             ...state.patterns,
-            // Keep these - they're learned across sessions
             likedStyles: state.patterns.likedStyles,
             dislikedStyles: state.patterns.dislikedStyles,
             userPreferences: state.patterns.userPreferences,
-            // Clear these - they're session-specific
             editHistory: [],
             failures: [],
             successfulPatterns: [],
             avoidedActions: [],
           },
         }));
-        // SMART CACHE: Clear cache learnings too
         clearCacheLearnings();
       },
     }),

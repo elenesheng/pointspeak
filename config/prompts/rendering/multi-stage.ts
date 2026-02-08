@@ -96,6 +96,7 @@ export const buildStage2StylePrompt = (params: MultiStagePromptParams): string =
 GEOMETRY IMMUTABILITY (CRITICAL):
 - Treat the incoming image as a fixed photograph
 - Do NOT modify walls, openings, proportions, or camera
+- Do NOT add new windows, doors, or openings that don't exist in the structure
 - All edits are surface-level only (materials, objects, lighting)
 - Preserve the exact camera position, height, tilt, yaw, and roll
 - Preserve the exact focal length and perspective
@@ -106,7 +107,8 @@ GEOMETRY (PRESERVE):
 - Maintain perspective geometry faithfully (camera angle, viewpoint, spatial structure)
 - Keep vertical lines parallel to edges, horizon at center
 - Preserve wall positions, room boundaries, and spatial relationships
-- Maintain window/balcony door openings as transparent glass
+- If openings (windows/doors) exist in the structure, maintain them as transparent glass
+- If a wall is solid in the structure, keep it SOLID - do NOT add openings
 
 ${styleProjection}
 ${objectContext}
@@ -145,8 +147,10 @@ PRIORITY:
 4. If uncertain, omit rather than guess
 
 LIGHTING:
-- Primary: Through window/balcony portals
-- Secondary: Professional interior photography lighting
+- Primary: Ceiling-mounted overhead lighting (all fixtures hang from CEILING, never from walls or sides)
+- Secondary: Through existing window/balcony openings (only if they exist in the structure)
+- All pendant lights, chandeliers, and fixtures must hang DOWN from the CEILING
+- Light direction: predominantly from ABOVE (ceiling), supplemented by window light
 - Maintain image quality and sharpness`;
 };
 

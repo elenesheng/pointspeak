@@ -128,8 +128,6 @@ Note: box_2d format is [ymin, xmin, ymax, xmax] with coordinates normalized 0-10
       try {
         parsed = JSON.parse(cleanedText);
       } catch (parseError) {
-        // Try to extract individual objects using regex as fallback
-        console.warn('Initial JSON parse failed, attempting recovery...', parseError);
         const objectMatches = cleanedText.match(/\{[^{}]*"name"[^{}]*\}/g);
         if (objectMatches && objectMatches.length > 0) {
           const recoveredObjects: DetectedObjectRaw[] = [];
@@ -144,7 +142,6 @@ Note: box_2d format is [ymin, xmin, ymax, xmax] with coordinates normalized 0-10
             }
           }
           if (recoveredObjects.length > 0) {
-            console.log(`Recovered ${recoveredObjects.length} objects from malformed JSON`);
             parsed = recoveredObjects;
           } else {
             throw parseError;
@@ -173,8 +170,6 @@ Note: box_2d format is [ymin, xmin, ymax, xmax] with coordinates normalized 0-10
         };
       });
     } catch (e) {
-      console.warn('Failed to parse object detection result:', e);
-      console.warn('Raw response:', text.slice(0, 500));
       return [];
     }
   }, cacheKey || undefined);

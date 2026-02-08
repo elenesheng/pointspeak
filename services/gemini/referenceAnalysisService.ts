@@ -49,8 +49,6 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
 
       const text = response.text?.trim();
       if (!text) throw new Error("Reference analysis failed");
-      
-      console.log(`Reference Analysis (${model}):`, text);
       return text;
     };
 

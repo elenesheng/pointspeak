@@ -11,7 +11,17 @@ export const ARCHITECTURAL_FIDELITY = `
 - Structural Shell: Do not move walls, doors, or windows. Use the provided mask as the absolute spatial truth.
 - Resolution: Maintain the original image sharpness and detail frequency.`;
 
-export const DIMENSION_CONSTRAINT = `Output: Same width, height, aspect ratio as input. No resize or crop.`;
+export const DIMENSION_CONSTRAINT = `
+OUTPUT DIMENSIONS (ABSOLUTE - NEVER VIOLATE):
+- Output MUST have EXACTLY the same pixel width as input (not ±1, not ±2, EXACT)
+- Output MUST have EXACTLY the same pixel height as input (not ±1, not ±2, EXACT)
+- Output MUST have EXACTLY the same aspect ratio as input
+- Do NOT resize, crop, zoom, stretch, squish, or change image boundaries
+- The output image frame must be PIXEL-PERFECT IDENTICAL to the input image frame
+- If the input is 1920x1080, output must be 1920x1080 (not 1920x1079, not 1919x1080, not 2048x2048)
+- DO NOT change canvas size under any circumstances
+- The image dimensions are LOCKED and IMMUTABLE
+`;
 
 export const LAYOUT_PRESERVATION_CRITICAL = `
 LAYOUT & PROPORTION PRESERVATION (ABSOLUTELY CRITICAL - DO NOT VIOLATE):

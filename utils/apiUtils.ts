@@ -13,12 +13,14 @@ export const generateCacheKey = (prefix: string, ...args: unknown[]): string => 
   return `${CACHE_VERSION}_${prefix}_${JSON.stringify(args)}`;
 };
 
+/**
+ * Executes a function with retry logic and optional caching.
+ * Uses exponential backoff for retries and skips retries on auth errors.
+ */
 export async function withSmartRetry<T>(fn: () => Promise<T>, cacheKey?: string): Promise<T> {
-  // Check cache first (if enabled)
   if (GEMINI_CONFIG.FLAGS.ENABLE_CACHING && cacheKey) {
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < GEMINI_CONFIG.SETTINGS.CACHE_TTL_MS) {
-      console.log(`[Client Cache] ✓ Hit: ${cacheKey.slice(0, 50)}...`);
       return cached.data as T;
     }
   }
@@ -29,10 +31,8 @@ export async function withSmartRetry<T>(fn: () => Promise<T>, cacheKey?: string)
     try {
       const result = await fn();
 
-      // Store in cache (if enabled)
       if (GEMINI_CONFIG.FLAGS.ENABLE_CACHING && cacheKey) {
         cache.set(cacheKey, { data: result, timestamp: Date.now() });
-        console.log(`[Client Cache] ✓ Stored: ${cacheKey.slice(0, 50)}...`);
       }
 
       return result;
@@ -40,17 +40,14 @@ export async function withSmartRetry<T>(fn: () => Promise<T>, cacheKey?: string)
       lastError = error;
       const errorMessage = error instanceof Error ? error.message : '';
       
-      // Don't retry on auth errors
       if (errorMessage.includes('PERMISSION_DENIED') || 
           errorMessage.includes('403') ||
           errorMessage.includes('401')) {
         throw error;
       }
       
-      // Exponential backoff
       if (i < GEMINI_CONFIG.SETTINGS.MAX_RETRIES - 1) {
         const delay = Math.pow(2, i) * 1000;
-        console.log(`[Retry] Attempt ${i + 1} failed, retrying in ${delay}ms...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
@@ -61,9 +58,11 @@ export async function withSmartRetry<T>(fn: () => Promise<T>, cacheKey?: string)
 
 export const clearAllCaches = () => {
   cache.clear();
-  console.log('[Client Cache] ✓ Cleared all cached data');
 };
 
+/**
+ * Executes primary function, falling back to secondary function on failure.
+ */
 export async function runWithFallback<T>(
   primaryFn: () => Promise<T>,
   fallbackFn: () => Promise<T>,
@@ -72,7 +71,6 @@ export async function runWithFallback<T>(
   try {
     return await primaryFn();
   } catch (error) {
-    console.warn(`${contextLabel} primary model failed, falling back...`, error);
     try {
       return await fallbackFn();
     } catch (fallbackError) {
@@ -83,7 +81,6 @@ export async function runWithFallback<T>(
 }
 
 export const getApiKey = () => {
-  // Next.js requires NEXT_PUBLIC_ prefix for client-side env vars
   const key = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
               process.env.GEMINI_API_KEY || 
               process.env.API_KEY || '';

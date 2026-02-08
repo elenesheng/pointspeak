@@ -165,6 +165,22 @@ export const normalizeBase64 = (base64: string): string => {
   return base64;
 };
 
+/**
+ * Get image dimensions from base64 string
+ * Critical for dimension validation after API calls
+ */
+export const getImageDimensions = async (base64: string): Promise<{ width: number; height: number }> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      resolve({ width: img.width, height: img.height });
+    };
+    img.onerror = () => reject(new Error('Failed to load image for dimension check'));
+    // Handle both data URLs and raw base64
+    img.src = base64.startsWith('data:') ? base64 : `data:image/png;base64,${base64}`;
+  });
+};
+
 // Crop Image Utility (now returns PNG for quality preservation)
 export const cropBase64Image = async (base64: string, box_2d: [number, number, number, number]): Promise<string> => {
   return new Promise((resolve, reject) => {

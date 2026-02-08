@@ -97,10 +97,10 @@ export const useAutoPilotQuality = ({
               'success'
             );
           }
-          attemptCountRef.current = 0; // Reset for next image
+          attemptCountRef.current = 0;
         }
       } catch (error) {
-        console.warn('[AutoPilot Quality] Failed:', error);
+        // Quality analysis failed, continue silently
       } finally {
         analyzingRef.current = false;
       }

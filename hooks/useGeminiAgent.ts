@@ -208,9 +208,7 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       }
       
       const appErr = mapApiError(err);
-      console.warn("Room scan failed:", appErr);
       
-      // Still initialize store even on partial failure to allow editing
       const fallbackAnalysis = { 
         room_type: "Detected Room", 
         constraints: [], 
@@ -415,7 +413,9 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           addLog("No active image to edit. Please upload a photo.", 'error');
           return undefined;
         }
-        const reasoningImage = inputBase64 || reasoningSnapshot.base64;
+        // CRITICAL: Always use current snapshot for reasoning, never inputBase64
+        // This ensures reasoning sees the latest edited image, not stale/original
+        const reasoningImage = reasoningSnapshot.base64;
         
         // Convert PNG to JPEG for API call (high quality to prevent degradation)
         const jpegWorkingBase64 = await convertToJPEG(normalizeBase64(reasoningImage), 0.98);
@@ -457,25 +457,27 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       setStatus(`Editing Image (${isPro ? 'Pro' : 'Fast'})...` as AppStatus);
       addLog(`⚡ Generating with ${modelName}...`, 'thought');
 
-      // Get original image for quality reference (lossless quality target)
-      // BUT: For global style edits with reference, ONLY use the reference image (not original)
+      // CRITICAL FIX #2: Never use original image as reference
+      // Reference images should ONLY be user-provided style references
+      // Original image should NEVER be sent as a reference image (causes reference ambiguity)
       const state = useSpatialStore.getState();
-      const originalImage = state.versionOrder.length > 0 
-        ? state.versions[state.versionOrder[0]]?.base64 || null
-        : null;
       
-      // Check if this is a global style edit - ONLY when NO object is selected
-      // If an object is selected, we already have reference and don't need 3-pass global
-      const isGlobalStyleEdit = !selectedObject && (
-                                effectiveSelectedObject.id === 'global_room_context' || 
-                                !effectiveSelectedObject.box_2d ||
-                                /room|whole|entire|global|all|redesign/i.test(translation.proposed_action));
-      const hasReferenceForGlobal = isGlobalStyleEdit && refImageToUse;
+      // CRITICAL FIX #7: Global style must be based on USER INTENT, not fallback object
+      // Global style should ONLY trigger when:
+      // 1. No object is selected AND
+      // 2. User explicitly mentions room/whole/entire/global/all/redesign
+      // Never use effectiveSelectedObject.id === 'global_room_context' as a condition
+      // (that's always true when no object is selected, causing mode confusion)
+      const isExplicitGlobalStyle = !selectedObject &&
+                                    /room|whole|entire|global|all|redesign/i.test(translation.proposed_action);
+      const isGlobalStyleEdit = isExplicitGlobalStyle;
+      const hasReferenceImage = !!refImageToUse;
+      const hasReferenceForGlobal = isGlobalStyleEdit && hasReferenceImage;
       
-      // For global style: ONLY reference image, no original
-      // For other edits: original as quality ref if no reference provided
-      const isUsingOriginalAsReference = !hasReferenceForGlobal && !!originalImage && !refImageToUse;
-      const qualityReferenceImage = hasReferenceForGlobal ? refImageToUse : (originalImage || refImageToUse);
+      // NEVER use original as reference - this causes reference ambiguity and reference return bugs
+      // Only use user-provided references
+      const isUsingOriginalAsReference = false; // Always false - never use original as reference
+      const qualityReferenceImage = hasReferenceImage ? refImageToUse : null; // Only user-provided references
 
       // Get learning context - SMART: Only pass relevant warnings for this operation type
       const learningContext = learningStore.getLearningContext(translation.operation_type);
@@ -513,11 +515,25 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
         addLog("No active image to edit. Please upload a photo.", 'error');
         return undefined;
       }
-      const editImageBase64 = inputBase64 || currentVersion.base64;
+      // CRITICAL FIX #1: Always use the latest version from store, NEVER inputBase64
+      // inputBase64 should ONLY be used for explicit retry/recovery flows (if ever needed)
+      // For all normal edits, always use currentVersion.base64 to ensure progressive chaining
+      // This prevents editing stale/original images and ensures floor edits persist
+      // 
+      // NOTE: We never use inputBase64 for normal edits - it causes chaining bugs
+      // If you need to retry with a specific image, create a new version first
+      const editImageBase64 = currentVersion.base64;
       
-      // Log which version we're editing for debugging
       const editVersionIndex = storeState.versionOrder.indexOf(currentVersion.id);
-      console.log(`[Versioning] Editing version ${editVersionIndex} (ID: ${currentVersion.id}, Current: ${storeState.currentVersionId})`);
+      // After edits (floor replacement, object replacement, global restyle),
+      // bounding boxes are wrong and cause spatial confusion
+      // Only pass objects for MOVE/REMOVE operations where spatial context is critical
+      // For other operations, let the model work without stale spatial constraints
+      const objectsForEdit = 
+        translation.operation_type === 'MOVE' ||
+        translation.operation_type === 'REMOVE'
+          ? scannedObjects // Only for operations that need spatial context
+          : undefined; // Don't pass stale objects for edits that change the scene
       
       let editedImageBase64: string;
       try {
@@ -531,13 +547,12 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           refDescToUse || undefined,
           qualityReferenceImage || null,
           isUsingOriginalAsReference, // Pass flag to indicate original image reference
-          scannedObjects, // Pass all detected objects for scene context
+          objectsForEdit, // Pass fresh objects only when needed, undefined otherwise
           learningContext, // Pass learning context for AI behavior adjustment
           onPassUpdate // Pass status callback for multi-pass updates
         );
         
         if (!editedImageBase64) {
-          console.error('[executeCommand] performImageEdit returned undefined or empty string');
           addLog('Image edit failed: No result returned from image editing service', 'error');
           setIsProcessing(false);
           setStatus('Ready');
@@ -546,7 +561,6 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           return undefined;
         }
       } catch (editError) {
-        console.error('[executeCommand] performImageEdit threw error:', editError);
         // Re-throw to be caught by outer catch block
         throw editError;
       }
@@ -554,15 +568,24 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
       if (currentOpId !== operationIdRef.current) return undefined;
 
       const pureBase64 = editedImageBase64.startsWith('data:') ? editedImageBase64.split(',')[1] : editedImageBase64;
-      
+
       // OPTIMISTIC UPDATE: Commit to store immediately with existing objects
       // This shows the result instantly, objects will update in background
+      // CRITICAL: Read objects from store directly to avoid React stale closure
+      const freshState = useSpatialStore.getState();
+      const freshObjects = freshState.currentVersionId
+        ? (freshState.versions[freshState.currentVersionId]?.objects || [])
+        : [];
+      const freshRoomAnalysis = freshState.currentVersionId
+        ? (freshState.versions[freshState.currentVersionId]?.roomAnalysis || latestRoomAnalysis)
+        : latestRoomAnalysis;
+
       store.addVersion({
         base64: pureBase64,
         operation: translation.operation_type,
         description: translation.interpreted_intent,
-        objects: scannedObjects, // Use existing objects immediately
-        roomAnalysis: { ...latestRoomAnalysis }, // Use latest insights from store
+        objects: freshObjects, // Fresh from store, not stale React closure
+        roomAnalysis: freshRoomAnalysis ? { ...freshRoomAnalysis } : null,
         selectedObjectId: effectiveSelectedObject?.id || null
       });
 
@@ -596,8 +619,8 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
             });
           }
         }
-      }).catch(err => {
-        console.warn('[Background] Object detection failed:', err);
+      }).catch(() => {
+        // Object detection failed, continue silently
       });
 
       return pureBase64;
@@ -605,8 +628,6 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
     } catch (err) {
       if (currentOpId !== operationIdRef.current) return undefined;
       const appErr = mapApiError(err);
-      
-      console.error('[executeCommand] Error during execution:', err);
       
       // Record failure for learning (translation might not be defined if error occurred before parsing)
       const failedAction = translation?.interpreted_intent || userText || 'Unknown action';
