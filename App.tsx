@@ -765,7 +765,7 @@ const App: React.FC = () => {
         <div className="w-20 h-20 bg-indigo-600 rounded-2xl flex items-center justify-center mb-6 shadow-2xl shadow-indigo-500/20">
           <Target className="w-10 h-10 text-white" />
         </div>
-        <h1 className="text-3xl font-bold text-slate-100 mb-2">Revision Spatial Intelligence</h1>
+        <h1 className="text-3xl font-bold text-slate-100 mb-2">SpaceVision Spatial Intelligence</h1>
         <button onClick={handleConnectKey} className="flex items-center gap-3 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold transition-all shadow-lg">
           <Key className="w-5 h-5" /> Connect API Key
         </button>
