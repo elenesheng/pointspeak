@@ -1,5 +1,9 @@
 import { NextAuthOptions } from 'next-auth';
+import CredentialsProvider from 'next-auth/providers/credentials';
 import GoogleProvider from 'next-auth/providers/google';
+
+const JUDGE_USERNAME = process.env.JUDGE_USERNAME;
+const JUDGE_PASSWORD = process.env.JUDGE_PASSWORD;
 
 declare module 'next-auth' {
   interface Session {
@@ -60,6 +64,24 @@ async function refreshAccessToken(token: any) {
 
 export const authOptions: NextAuthOptions = {
   providers: [
+    CredentialsProvider({
+      name: 'Credentials',
+      credentials: {
+        username: { label: 'Username', type: 'text' },
+        password: { label: 'Password', type: 'password' },
+      },
+      async authorize(credentials) {
+        if (
+          JUDGE_USERNAME &&
+          JUDGE_PASSWORD &&
+          credentials?.username === JUDGE_USERNAME &&
+          credentials?.password === JUDGE_PASSWORD
+        ) {
+          return { id: 'judge', name: 'Hackathon Judge', email: 'judge@spacevision.app' };
+        }
+        return null;
+      },
+    }),
     GoogleProvider({
       clientId: GOOGLE_CLIENT_ID,
       clientSecret: GOOGLE_CLIENT_SECRET,
@@ -73,6 +95,9 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+  session: {
+    strategy: 'jwt',
+  },
   callbacks: {
     async jwt({ token, account }) {
       // Initial sign in

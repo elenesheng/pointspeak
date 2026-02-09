@@ -90,9 +90,7 @@ const App: React.FC = () => {
   const prevEditHistoryLengthRef = useRef<number>(0); 
   const feedbackShownForRef = useRef<Set<string>>(new Set()); 
   
-  // Background generation state
-  const backgroundAnalysisRef = useRef<boolean>(false);
-  const backgroundAssistantRef = useRef<boolean>(false);
+  // Track last background image hash to avoid redundant analysis
   const lastBackgroundImageHash = useRef<string | null>(null);
 
   const [isGeneratingRender, setIsGeneratingRender] = useState(false);
@@ -168,8 +166,6 @@ const App: React.FC = () => {
           
           setLastAnalyzedImageHash(null);
           lastBackgroundImageHash.current = null;
-          backgroundAnalysisRef.current = false;
-          backgroundAssistantRef.current = false;
           
           if (hasAppliedStyle) {
             setHasAppliedStyle(false);
@@ -183,87 +179,11 @@ const App: React.FC = () => {
     prevEditHistoryLengthRef.current = editHistory.length;
   }, [editHistory.length, editHistory, hasAppliedStyle]);
 
-  // Background Analysis: Run after initial upload and after every edit
   useEffect(() => {
-    const activeBase64 = getActiveBase64();
-    if (!activeBase64 || !roomAnalysis) return;
-    
-    const imageHash = `${activeBase64.slice(0, 100)}_${activeBase64.length}`;
-    
-    // Skip if already analyzed this image or currently analyzing
-    if (lastBackgroundImageHash.current === imageHash || isAnalyzing) return;
-    
-    if (showAnalysis) return;
-    
-    const runBackgroundAnalysis = async () => {
-      if (backgroundAnalysisRef.current) return;
-      backgroundAnalysisRef.current = true;
-      
-      try {
-        const learningContext = learningStore.getLearningContext();
-        const recentAttempts = attemptedFixesRef.current
-          .filter(a => Date.now() - a.timestamp < 60 * 60 * 1000)
-          .map(a => a.prompt);
-        const analysis = await analyzeImageQuality(
-          activeBase64,
-          roomAnalysis.is_2d_plan || false,
-          learningContext,
-          recentAttempts.length > 0 ? recentAttempts : undefined
-        );
-
-        setQualityAnalysis(analysis);
-        setLastAnalyzedImageHash(imageHash);
-        lastBackgroundImageHash.current = imageHash;
-      } catch (error) {
-        // Background analysis failed, continue silently
-      } finally {
-        backgroundAnalysisRef.current = false;
-      }
-    };
-    
-    // Delay background analysis to avoid 429 rate limits from Gemini
-    // Room analysis + object detection fire first, this runs after they settle
-    const timer = setTimeout(runBackgroundAnalysis, 5000);
-    return () => clearTimeout(timer);
-  }, [imageUrl, generatedImage, roomAnalysis, showAnalysis, isAnalyzing, learningStore, editHistory.length]);
-
-  useEffect(() => {
-    // Clear analysis cache when version changes
+    // Clear analysis cache when version changes (so next manual open re-analyzes)
     setLastAnalyzedImageHash(null);
     lastBackgroundImageHash.current = null;
-    backgroundAnalysisRef.current = false;
-    backgroundAssistantRef.current = false;
   }, [currentEditIndex]);
-
-  // Background Assistant: Run immediately after initial upload and after every edit
-  useEffect(() => {
-    const activeBase64 = getActiveBase64();
-    if (!activeBase64 || !roomAnalysis || scannedObjects.length === 0) return;
-    
-    // Skip if user is currently viewing assistant or analysis (don't run in background)
-    if (isAssistantOpen || showAnalysis) return;
-    
-    // Skip if already generating or already running
-    if (isGeneratingSuggestions || backgroundAssistantRef.current) return;
-    
-    // Delay background assistant to avoid 429 rate limits
-    // Runs after room analysis + object detection + quality analysis have settled
-    const runBackgroundAssistant = async () => {
-      if (backgroundAssistantRef.current) return;
-      backgroundAssistantRef.current = true;
-
-      try {
-        await generateIdeas(activeBase64, roomAnalysis, scannedObjects, 'auto-refresh', false, hasAppliedStyle);
-      } catch (error) {
-        // Background assistant failed, continue silently
-      } finally {
-        backgroundAssistantRef.current = false;
-      }
-    };
-
-    const timer = setTimeout(runBackgroundAssistant, 8000);
-    return () => clearTimeout(timer);
-  }, [generatedImage, roomAnalysis, scannedObjects.length, isAssistantOpen, showAnalysis, isGeneratingSuggestions, generateIdeas]);
 
   const handleConnectKey = async () => {
     if (window.aistudio) {
@@ -519,8 +439,8 @@ const App: React.FC = () => {
     if (attemptedFixesRef.current.length > 5) {
       attemptedFixesRef.current = attemptedFixesRef.current.slice(-5);
     }
-    // Invalidate analysis cache so next open re-analyzes with self-correction context
-    setLastAnalyzedImageHash(null);
+    // Don't invalidate cache here - the image will change after the edit executes,
+    // which naturally invalidates the cache. Invalidating now triggers background re-analysis.
     setShowAnalysis(false);
     setUserInput(fixPrompt);
     addLog(`🔧 Fix loaded: ${fixPrompt.slice(0, 50)}...`, 'action');

@@ -40,9 +40,14 @@ export async function withSmartRetry<T>(fn: () => Promise<T>, cacheKey?: string)
       lastError = error;
       const errorMessage = error instanceof Error ? error.message : '';
       
-      if (errorMessage.includes('PERMISSION_DENIED') || 
+      // Don't retry on auth errors or rate limits
+      // 429 retries cause a cascade - each retry triggers more 429s
+      if (errorMessage.includes('PERMISSION_DENIED') ||
           errorMessage.includes('403') ||
-          errorMessage.includes('401')) {
+          errorMessage.includes('401') ||
+          errorMessage.includes('429') ||
+          errorMessage.includes('Too Many Requests') ||
+          errorMessage.includes('RESOURCE_EXHAUSTED')) {
         throw error;
       }
       
