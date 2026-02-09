@@ -1,5 +1,5 @@
 {
-  "name": "SpaceVision",
+  "name": "Revision",
   "description": "A spatial intelligence tool that allows users to interact with interior spaces by pointing and chatting with an AI agent.",
   "requestFramePermissions": [
     "camera"

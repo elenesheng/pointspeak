@@ -77,7 +77,7 @@ export const authOptions: NextAuthOptions = {
           credentials?.username === JUDGE_USERNAME &&
           credentials?.password === JUDGE_PASSWORD
         ) {
-          return { id: 'judge', name: 'Hackathon Judge', email: 'judge@spacevision.app' };
+          return { id: 'judge', name: 'Hackathon Judge', email: 'judge@revision.app' };
         }
         return null;
       },

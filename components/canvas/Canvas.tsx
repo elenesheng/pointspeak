@@ -236,7 +236,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                 <Upload className="w-10 h-10 text-slate-500 group-hover:text-indigo-400" />
               </div>
               <div className="text-center px-8">
-                <p className="text-xl font-bold text-slate-200">SpaceVision</p>
+                <p className="text-xl font-bold text-slate-200">Revision</p>
                 <p className="text-sm text-slate-500 mt-2">
                   Upload an existing interior photo to edit, rearrange, or analyze using spatial reasoning.
                   <br/><span className="text-indigo-400/80 mt-1 block">Or upload a floor plan to visualize styles.</span>
@@ -331,7 +331,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       {/* Top Bar */}
       <div className="h-16 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900/50 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
-          <span className="font-bold tracking-tight text-lg text-white">SpaceVision</span>
+          <span className="font-bold tracking-tight text-lg text-white">Revision</span>
           {!isProcessing && (
             <span className="text-xs font-medium text-slate-400 bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
               {getInstructionText()}

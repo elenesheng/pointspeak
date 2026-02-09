@@ -470,7 +470,7 @@ export const useLearningStore = create<LearningState>()(
       },
     }),
     {
-      name: 'pointspeak-learning',
+      name: 'revision-learning',
       partialize: (state) => ({ patterns: state.patterns }),
     }
   )

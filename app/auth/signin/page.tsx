@@ -77,7 +77,7 @@ export default function SignIn() {
         <Target className="w-10 h-10 text-white" />
       </div>
 
-      <h1 className="text-3xl font-bold text-slate-100 mb-2">SpaceVision</h1>
+      <h1 className="text-3xl font-bold text-slate-100 mb-2">Revision</h1>
       <p className="text-slate-400 mb-8 text-center max-w-md">
         Sign in to access the AI-powered interior design editor
       </p>

@@ -52,7 +52,7 @@ let cacheState: CacheState = {
 };
 
 // Load from localStorage on init
-const STORAGE_KEY = 'pointspeak-gemini-cache-state';
+const STORAGE_KEY = 'revision-gemini-cache-state';
 
 function loadState(): void {
   if (typeof window === 'undefined') return;
@@ -313,7 +313,7 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
           role: 'user',
           parts: [{ text: `USER LEARNING CONTEXT:\n${contextString}` }]
         }],
-        displayName: `pointspeak-user-${Date.now()}`,
+        displayName: `revision-user-${Date.now()}`,
         ttl: `${CACHE_CONFIG.ttlSeconds}s`,
       }
     });

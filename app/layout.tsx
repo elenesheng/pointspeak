@@ -3,7 +3,7 @@ import { Providers } from './providers';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'SpaceVision - AI Interior Editor',
+  title: 'Revision - AI Interior Editor',
   description: 'AI-powered interior design and visualization tool',
 };
 
