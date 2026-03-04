@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenAI } from '@google/genai';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 
 // Allow large request bodies for base64 images
 export const maxDuration = 120; // 2 minutes for image generation
@@ -16,6 +18,11 @@ function getServerApiKey(): string {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
     const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
     if (contentLength > MAX_BODY_SIZE) {
       return NextResponse.json({ error: 'Request too large' }, { status: 413 });
