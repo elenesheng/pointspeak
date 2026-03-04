@@ -1,10 +1,10 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
 import { IntentTranslation } from "../../types/ai.types";
 import { IdentifiedObject, DetailedRoomAnalysis, Coordinate } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, runWithFallback } from "../../utils/apiUtils";
+import { withSmartRetry, runWithFallback } from "../../utils/apiUtils";
 import { getPresetForOperation } from "../../config/modelConfigs";
+import { geminiGenerate } from './client';
 
 export const translateIntentWithSpatialAwareness = async (
   base64Image: string,
@@ -17,8 +17,6 @@ export const translateIntentWithSpatialAwareness = async (
 ): Promise<IntentTranslation> => {
   
   const generate = async (model: string) => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
     const isPlan = spatialContext.is_2d_plan;
 
     const prompt = `
@@ -52,7 +50,7 @@ export const translateIntentWithSpatialAwareness = async (
       }
     `;
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: model,
       contents: {
         parts: [

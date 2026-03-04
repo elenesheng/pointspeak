@@ -3,9 +3,10 @@
  * Uses Gemini's reasoning capability to analyze both images and create a detailed plan
  */
 
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
+import { geminiGenerate } from './client';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey, runWithFallback } from '../../utils/apiUtils';
+import { runWithFallback } from '../../utils/apiUtils';
 import { convertToJPEG, normalizeBase64 } from '../../utils/imageProcessing';
 import { DetailedRoomAnalysis } from '../../types/spatial.types';
 
@@ -202,7 +203,6 @@ export const analyzeGlobalStyleApplication = async (
   roomAnalysis: DetailedRoomAnalysis,
   sceneInventory: string
 ): Promise<GlobalStylePlan> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   // Convert images to JPEG for API
   const [currentRoomJpeg, referenceJpeg] = await Promise.all([
@@ -308,7 +308,7 @@ OUTPUT: Provide JSON plan with specific colors, materials, and furniture from Im
 `;
 
   const runAnalysis = async (model: string): Promise<GlobalStylePlan> => {
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: model,
       contents: {
         parts: [

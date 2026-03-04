@@ -1,6 +1,6 @@
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Upload, Trash2, ScanSearch, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Layers, Map as MapIcon, ArrowRight, LayoutTemplate, Camera, Palette, Eye } from 'lucide-react';
+import { Upload, Trash2, ScanSearch, ImageIcon, Move, Sparkles, Undo2, Redo2, RotateCcw, ImageOff, Layers, ArrowRight, LayoutTemplate, Camera, Eye, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { Coordinate, IdentifiedObject } from '../../types/spatial.types';
 import { AppStatus } from '../../types/ui.types';
 import { generateBinaryMask } from '../../utils/imageProcessing';
@@ -50,6 +50,12 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [hoveredObject, setHoveredObject] = useState<IdentifiedObject | null>(null);
   const [ripples, setRipples] = useState<Array<{ x: number; y: number; id: number }>>([]);
   const imageRef = useRef<HTMLImageElement>(null);
+
+  // Zoom & Pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   
   // New Render Mode State
   const [uploadMode, setUploadMode] = useState<'photo' | 'plan'>('photo');
@@ -130,24 +136,63 @@ export const Canvas: React.FC<CanvasProps> = ({
     setShowCrosshair(false);
     setCursorPos(null);
     setHoveredObject(null);
+    setIsPanning(false);
+  };
+
+  // Zoom with scroll wheel
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.15 : 0.15;
+    setZoom(prev => {
+      const next = Math.min(5, Math.max(1, prev + delta));
+      if (next === 1) setPan({ x: 0, y: 0 });
+      return next;
+    });
+  };
+
+  // Pan with middle-click or when zoomed + left-drag
+  const handlePanStart = (e: React.MouseEvent) => {
+    if (zoom <= 1) return;
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      setIsPanning(true);
+      panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+    }
+  };
+
+  const handlePanMove = (e: React.MouseEvent) => {
+    if (!isPanning) return;
+    const dx = e.clientX - panStart.current.x;
+    const dy = e.clientY - panStart.current.y;
+    setPan({ x: panStart.current.panX + dx, y: panStart.current.panY + dy });
+  };
+
+  const handlePanEnd = () => {
+    setIsPanning(false);
+  };
+
+  const resetZoom = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   };
 
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!imageRef.current || !imageUrl || isProcessing) return;
-    
+    if (isPanning || e.altKey) return;
+
     // Prevent ripple if clicking a tooltip button
     if ((e.target as HTMLElement).closest('button')) return;
 
     const rect = imageRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
     const rippleId = Date.now();
     setRipples(prev => [...prev, { x, y, id: rippleId }]);
     setTimeout(() => {
       setRipples(prev => prev.filter(r => r.id !== rippleId));
     }, 1000);
-    
+
     onImageClick(e, rect);
   };
 
@@ -365,12 +410,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       </div>
 
       {/* Image Area */}
-      <div className="flex-1 flex items-center justify-center p-8 overflow-auto relative">
-        <div 
-          className={`relative max-h-full max-w-full inline-block rounded-xl shadow-2xl overflow-hidden group ${isProcessing ? 'cursor-wait' : 'cursor-none'}`}
+      <div className="flex-1 flex items-center justify-center p-8 overflow-hidden relative" onWheel={handleWheel}>
+        <div
+          className={`relative max-h-full max-w-full inline-block rounded-xl shadow-2xl overflow-hidden group ${isPanning ? 'cursor-grabbing' : isProcessing ? 'cursor-wait' : 'cursor-none'}`}
+          style={{ transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`, transformOrigin: 'center center', transition: isPanning ? 'none' : 'transform 0.15s ease-out' }}
           onClick={handleClick}
-          onMouseMove={handleMouseMove}
+          onMouseDown={handlePanStart}
+          onMouseMove={(e) => { handleMouseMove(e); handlePanMove(e); }}
           onMouseLeave={handleMouseLeave}
+          onMouseUp={handlePanEnd}
         >
           {/* Image Display Logic */}
           {imgError ? (
@@ -430,6 +478,17 @@ export const Canvas: React.FC<CanvasProps> = ({
           ))}
         </div>
         
+        {/* Zoom Controls */}
+        {zoom > 1 && (
+          <div className="absolute top-4 left-4 flex items-center gap-1 bg-slate-900/80 backdrop-blur-xl p-1.5 rounded-xl border border-slate-700 shadow-2xl z-40 animate-in fade-in">
+            <button onClick={() => setZoom(prev => Math.min(5, prev + 0.25))} className="p-1.5 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors"><ZoomIn className="w-4 h-4" /></button>
+            <button onClick={() => setZoom(prev => { const next = Math.max(1, prev - 0.25); if (next === 1) setPan({ x: 0, y: 0 }); return next; })} className="p-1.5 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors"><ZoomOut className="w-4 h-4" /></button>
+            <span className="text-[10px] font-bold text-slate-400 px-1.5">{Math.round(zoom * 100)}%</span>
+            <div className="w-px h-4 bg-slate-700" />
+            <button onClick={resetZoom} className="p-1.5 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors" title="Reset zoom"><Maximize2 className="w-4 h-4" /></button>
+          </div>
+        )}
+
         {/* Multi-View Switcher UI */}
         {visualizationViews && visualizationViews.length > 1 && !isProcessing && (
            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-slate-900/80 backdrop-blur-xl p-2 rounded-xl border border-slate-700 shadow-2xl z-40 animate-in slide-in-from-bottom-6">

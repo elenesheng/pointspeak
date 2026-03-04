@@ -1,9 +1,8 @@
-import { GoogleGenAI } from '@google/genai';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey } from '../../utils/apiUtils';
 import { addLearning } from './contextCacheService';
 import { IntentTranslation } from '../../types/ai.types';
 import { getPresetForOperation } from '../../config/modelConfigs';
+import { geminiGenerate } from './client';
 
 /**
  * Analyzes prompt patterns when user likes/dislikes an edit
@@ -15,8 +14,6 @@ export async function analyzePromptPattern(
   wasSuccessful: boolean,
   failureReason?: 'hallucination' | 'quality' | 'style' | 'wrong_target' | 'incomplete'
 ): Promise<void> {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
   const analysisPrompt = wasSuccessful
     ? `Analyze this successful image edit prompt pattern:
 
@@ -46,7 +43,7 @@ TASK: Identify what went wrong in the prompt:
 OUTPUT: A concise description of the failure pattern and what to avoid (max 100 words).`;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.REASONING,
       contents: { parts: [{ text: analysisPrompt }] },
       config: {

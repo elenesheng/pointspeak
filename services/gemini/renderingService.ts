@@ -1,6 +1,5 @@
-import { GoogleGenAI, GenerateContentResponse, Part } from '@google/genai';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey } from '../../utils/apiUtils';
+import { geminiGenerate } from './client';
 import { convertToPNG, normalizeBase64 } from '../../utils/imageProcessing';
 import { IdentifiedObject } from '../../types/spatial.types';
 import { getPresetForOperation, IMAGE_SIZE_2K } from '../../config/modelConfigs';
@@ -14,7 +13,7 @@ interface ContentPart {
 }
 
 
-const extractBase64 = (response: GenerateContentResponse): string => {
+const extractBase64 = (response: any): string => {
   const parts = response.candidates?.[0]?.content?.parts || [];
   
   // Check inline data first (preferred)
@@ -48,9 +47,6 @@ export const generateMultiAngleRender = async (
   retryMode: boolean = false,
   previousImageBase64?: string
 ): Promise<string[]> => {
-  const apiKey = getApiKey();
-  const ai = new GoogleGenAI({ apiKey });
-
   const objectContext =
     detectedObjects && detectedObjects.length > 0
       ? `\n\nDetected objects:\n${detectedObjects.map((o) => `- ${o.name} (${o.category})`).join('\n')}`
@@ -102,7 +98,7 @@ export const generateMultiAngleRender = async (
       ? 0.1 
       : getPresetForOperation('RENDER_SINGLE').temperature;
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
       contents: { parts },
       config: {
@@ -181,9 +177,6 @@ export const generateMultiStageRender = async (
   retryMode: boolean = false,
   previousImageBase64?: string
 ): Promise<string[]> => {
-  const apiKey = getApiKey();
-  const ai = new GoogleGenAI({ apiKey });
-
   const objectContext =
     detectedObjects && detectedObjects.length > 0
       ? `\n\nDetected objects:\n${detectedObjects.map((o) => `- ${o.name} (${o.category})`).join('\n')}`
@@ -211,7 +204,7 @@ export const generateMultiStageRender = async (
   // Lower temperature for retry mode
   const stage1Temperature = retryMode ? 0.1 : getPresetForOperation('RENDER_STRUCTURE').temperature;
   
-  const stage1Response = await ai.models.generateContent({
+  const stage1Response = await geminiGenerate({
     model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
     contents: { parts: stage1Parts },
       config: {
@@ -241,7 +234,7 @@ export const generateMultiStageRender = async (
     
     stage2Parts.push({ text: correctionPrompt });
     
-    const stage2Response = await ai.models.generateContent({
+    const stage2Response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
       contents: { parts: stage2Parts },
       config: {
@@ -275,7 +268,7 @@ export const generateMultiStageRender = async (
 
   stage2Parts.push({ text: stylePrompt });
 
-  const stage2Response = await ai.models.generateContent({
+  const stage2Response = await geminiGenerate({
     model: GEMINI_CONFIG.MODELS.IMAGE_EDITING_PRO,
     contents: { parts: stage2Parts },
     config: {

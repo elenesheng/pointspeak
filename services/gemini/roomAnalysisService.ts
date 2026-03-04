@@ -1,9 +1,10 @@
 
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { Type, Schema } from "@google/genai";
 import { DetailedRoomAnalysis, RoomInsight } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
+import { withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
 import { ROOM_ANALYSIS_SYSTEM_INSTRUCTION, getRoomAnalysisInstruction, buildUpdateInsightsPrompt } from "../../config/prompts/analysis/room";
+import { geminiGenerate } from './client';
 
 /**
  * STRICT SCHEMA DEFINITIONS
@@ -60,10 +61,9 @@ export const analyzeRoomSpace = async (base64Image: string): Promise<DetailedRoo
   const cacheKey = generateCacheKey('roomAnalysis_v17_align_strict', uniqueId);
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     
     const runAnalysis = async (model: string) => {
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
         model: model,
         contents: {
           parts: [
@@ -94,12 +94,11 @@ export const analyzeRoomSpace = async (base64Image: string): Promise<DetailedRoo
 };
 
 export const updateInsightsAfterEdit = async (base64Image: string, previousAnalysis: DetailedRoomAnalysis, editDescription: string): Promise<RoomInsight[]> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
   
   const prompt = buildUpdateInsightsPrompt(editDescription);
 
   try {
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.REASONING, 
       contents: {
         parts: [

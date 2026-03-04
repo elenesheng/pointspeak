@@ -535,6 +535,19 @@ export const useGeminiAgent = ({ addLog, pins }: UseGeminiAgentProps) => {
           ? scannedObjects // Only for operations that need spatial context
           : undefined; // Don't pass stale objects for edits that change the scene
       
+      // ZOOM CROP: Disabled - Gemini should edit the full image to preserve context
+      // const shouldCropForQuality =
+      //   effectiveSelectedObject?.box_2d &&
+      //   effectiveSelectedObject.id !== 'global_context' &&
+      //   translation.operation_type !== 'REMOVE' &&
+      //   translation.operation_type !== 'MOVE';
+      // if (shouldCropForQuality && effectiveSelectedObject?.box_2d) {
+      //   const [ymin, xmin, ymax, xmax] = effectiveSelectedObject.box_2d;
+      //   const pad = 100;
+      //   const paddedBox = [Math.max(0,ymin-pad), Math.max(0,xmin-pad), Math.min(1000,ymax+pad), Math.min(1000,xmax+pad)];
+      //   imageForEdit = await cropBase64Image(normalizeBase64(editImageBase64), paddedBox);
+      // }
+
       let editedImageBase64: string;
       try {
         editedImageBase64 = await performImageEdit(

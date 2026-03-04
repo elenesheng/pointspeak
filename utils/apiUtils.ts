@@ -85,9 +85,7 @@ export async function runWithFallback<T>(
   }
 }
 
+/** @deprecated API key is now server-side only. Use geminiGenerate() from services/gemini/client.ts */
 export const getApiKey = () => {
-  const key = process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
-              process.env.GEMINI_API_KEY || 
-              process.env.API_KEY || '';
-  return key;
+  return '';
 };

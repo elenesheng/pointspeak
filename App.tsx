@@ -123,8 +123,8 @@ const App: React.FC = () => {
             setApiKeySelected(true);
           }
         } else {
-          const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
-          setApiKeySelected(!!apiKey || true);
+          // API key is now server-side only, always allow client access
+          setApiKeySelected(true);
         }
       } catch (e) {
         setApiKeySelected(true);

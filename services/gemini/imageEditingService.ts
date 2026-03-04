@@ -2,11 +2,10 @@
  * Image editing service using Gemini API. Handles object replacement, surface replacement,
  * and global style edits with reference image support and dimension validation.
  */
-import { GoogleGenAI } from '@google/genai';
+import { geminiGenerate } from './client';
 import { IntentTranslation } from '../../types/ai.types';
 import { DetailedRoomAnalysis, IdentifiedObject } from '../../types/spatial.types';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey } from '../../utils/apiUtils';
 import { convertToJPEG, convertToPNG, normalizeBase64, getImageDimensions } from '../../utils/imageProcessing';
 import { recordEdit } from './contextCacheService';
 import { buildEditingPrompt } from '../../config/prompts/editing';
@@ -148,8 +147,6 @@ const performGeminiEdit = async (
   learningContext?: LearningContext,
   onPassUpdate?: (passNumber: number, passName: string, currentImage: string) => void
 ): Promise<string> => {
-  const apiKey = getApiKey();
-  const ai = new GoogleGenAI({ apiKey });
 
   const subjectName = identifiedObject.visual_details || identifiedObject.name;
   const sourceCoords = identifiedObject.position;
@@ -290,7 +287,7 @@ The output canvas dimensions are LOCKED to ${inputDimensions.width}×${inputDime
 
     const shouldPreserveInputDimensions = editMode === 'OBJECT_REPLACEMENT' || editMode === 'SURFACE_REPLACEMENT';
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: preferredModelId,
       contents: { parts },
       config: {
@@ -339,7 +336,7 @@ The output canvas dimensions are LOCKED to ${inputDimensions.width}×${inputDime
             { text: retryPrompt }
           ];
           
-          const retryResponse = await ai.models.generateContent({
+          const retryResponse = await geminiGenerate({
             model: preferredModelId,
             contents: { parts: retryParts },
             config: {

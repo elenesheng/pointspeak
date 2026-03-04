@@ -202,7 +202,7 @@ export const EDIT_MODE_PRESETS = {
 
   SURFACE_REPLACEMENT: {
     pro: {
-      temperature: 0.12,
+      temperature: 0.11,
       topP: 0.85,
       topK: 25,
       description: 'Material system replacement (floors, walls)',

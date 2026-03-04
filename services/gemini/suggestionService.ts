@@ -1,6 +1,6 @@
-import { GoogleGenAI } from '@google/genai';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey, withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
+import { withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
+import { geminiGenerate } from './client';
 import { DesignSuggestion, OperationType } from '../../types/ai.types';
 import { DetailedRoomAnalysis, IdentifiedObject } from '../../types/spatial.types';
 import { getGeminiCacheName, getLearnedPatternsForOperation, getInlineContext } from './contextCacheService';
@@ -78,7 +78,6 @@ export const generateSuggestions = async (
   );
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     // Build mode-specific prompt
     const prompt = buildPromptForMode(mode, roomAnalysis, detectedObjects, userGoal, learningContext);
@@ -101,7 +100,7 @@ export const generateSuggestions = async (
       console.log(`[Design Suggestions] Using cached context: ${cacheName}`);
     }
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.REASONING,
       contents: {
         parts: [
@@ -295,7 +294,6 @@ export const generateFloorPlanStyleCards = async (
   );
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     const rooms = detectedObjects?.filter(obj => 
       obj.category === 'Structure' && 
@@ -322,7 +320,7 @@ export const generateFloorPlanStyleCards = async (
       config.cachedContent = cacheName;
     }
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.REASONING,
       contents: {
         parts: [

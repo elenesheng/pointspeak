@@ -1,8 +1,8 @@
 
-import { GoogleGenAI } from "@google/genai";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
+import { withSmartRetry, generateCacheKey, runWithFallback } from "../../utils/apiUtils";
 import { getPresetForOperation } from "../../config/modelConfigs";
+import { geminiGenerate } from './client';
 
 /**
  * Analyzes a reference image to extract material, texture, and pattern information.
@@ -14,8 +14,6 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
   const cacheKey = generateCacheKey('refAnalysis_v42_object_id', uniqueId);
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
-    
     const runRefAnalysis = async (model: string) => {
       const prompt = `
       You are a Material & Texture Analyst. Your job is to extract style information from reference images to be applied to 3D objects.
@@ -33,7 +31,7 @@ export const analyzeReferenceImage = async (base64Image: string): Promise<string
       "Object: French Door Refrigerator. Material: Brushed Stainless Steel. Texture: Smooth, vertical grain. Color: Silver/Grey. Style: Modern."
       `;
 
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
         model: model, 
         contents: {
           parts: [

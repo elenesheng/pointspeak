@@ -2,8 +2,8 @@
 const nextConfig = {
   reactStrictMode: true,
   env: {
-    // These will be available on both server and client
-    NEXT_PUBLIC_GEMINI_API_KEY: process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY,
+    // Server-only env vars are accessed via process.env in API routes
+    // GEMINI_API_KEY is intentionally NOT exposed to the client
     VERTEX_PROJECT_ID: process.env.VERTEX_PROJECT_ID,
     VERTEX_LOCATION: process.env.VERTEX_LOCATION,
   },

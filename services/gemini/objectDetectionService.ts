@@ -1,7 +1,7 @@
-import { GoogleGenAI } from '@google/genai';
 import { IdentifiedObject } from '../../types/spatial.types';
-import { getApiKey, withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
+import { withSmartRetry, generateCacheKey } from '../../utils/apiUtils';
 import { getPresetForOperation } from '../../config/modelConfigs';
+import { geminiGenerate } from './client';
 
 interface DetectedObjectRaw {
   name?: string;
@@ -58,7 +58,6 @@ export const scanImageForObjects = async (
   const cacheKey = skipCache ? null : generateCacheKey('fullScan_v7_improved', uniqueId);
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     const model = 'gemini-3-flash-preview';
 
     const prompt = `Detect all objects and spaces in this image. Return a JSON array.
@@ -104,7 +103,7 @@ Output format:
 
 Note: box_2d format is [ymin, xmin, ymax, xmax] with coordinates normalized 0-1000.`;
 
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: model,
       contents: {
         parts: [

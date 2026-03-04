@@ -1,5 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
-import { getApiKey } from '../../utils/apiUtils';
+import { geminiCacheCreate, geminiCacheDelete } from './client';
 
 /**
  * Gemini Context Cache Manager
@@ -263,7 +262,6 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
     return null;
   }
 
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   // Check if we can reuse existing cache
   // Cache must: 1) exist, 2) be for same model, 3) model must support caching, 4) not need refresh
@@ -300,25 +298,20 @@ export async function getGeminiCacheName(model: string, nonBlocking: boolean = f
   try {
     if (cacheState.cacheName) {
       try {
-        await ai.caches.delete({ name: cacheState.cacheName });
+        await geminiCacheDelete(cacheState.cacheName);
       } catch (e) {
         // Cache may have expired, ignore
       }
     }
 
-    const cacheResponse = await ai.caches.create({
-      model: model,
-      config: {
-        contents: [{
-          role: 'user',
-          parts: [{ text: `USER LEARNING CONTEXT:\n${contextString}` }]
-        }],
-        displayName: `revision-user-${Date.now()}`,
-        ttl: `${CACHE_CONFIG.ttlSeconds}s`,
-      }
+    const cacheName = await geminiCacheCreate(model, {
+      contents: [{
+        role: 'user',
+        parts: [{ text: `USER LEARNING CONTEXT:\n${contextString}` }]
+      }],
+      displayName: `revision-user-${Date.now()}`,
+      ttl: `${CACHE_CONFIG.ttlSeconds}s`,
     });
-
-    const cacheName = cacheResponse.name || null;
     cacheState.cacheName = cacheName;
     cacheState.cacheModel = model;
     cacheState.editsSinceRefresh = 0;

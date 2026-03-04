@@ -2,9 +2,10 @@
  * Quality analysis service for detecting and categorizing image quality issues.
  * Provides auto-fixable suggestions and prompt optimization tips.
  */
-import { GoogleGenAI, Type, Schema } from '@google/genai';
+import { Type, Schema } from '@google/genai';
+import { geminiGenerate } from './client';
 import { GEMINI_CONFIG } from '../../config/gemini.config';
-import { getApiKey, withSmartRetry, runWithFallback } from '../../utils/apiUtils';
+import { withSmartRetry, runWithFallback } from '../../utils/apiUtils';
 import { getGeminiCacheName, getInlineContext, getLearnedPatternsForOperation } from './contextCacheService';
 import { getPresetForOperation } from '../../config/modelConfigs';
 import { buildQualityAnalysisSystemPrompt, getQualityAnalysisInstruction } from '../../config/prompts/quality/analysis';
@@ -124,7 +125,6 @@ export const analyzeImageQuality = async (
   const cacheKey = `quality_${imageBase64.length}_${imageBase64.slice(-20)}`;
 
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
     // Build learning context for analysis (includes prompt patterns from cache)
     let learningSection = '';
@@ -211,7 +211,7 @@ ${learningContext.recentFailures.map(f => `  - ${f}`).join('\n')}`;
         config.cachedContent = cacheName;
       }
       
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
         model: model,
         contents: {
           parts: [
@@ -243,7 +243,6 @@ export const analyzeAfterEdit = async (
   editDescription: string,
   previousIssues: QualityIssue[]
 ): Promise<QualityAnalysis> => {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   const previousIssuesContext =
     previousIssues.length > 0
@@ -251,7 +250,7 @@ export const analyzeAfterEdit = async (
       : '';
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await geminiGenerate({
       model: GEMINI_CONFIG.MODELS.REASONING,
       contents: {
         parts: [

@@ -1,9 +1,10 @@
 
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { Type, Schema } from "@google/genai";
 import { SpatialValidation, IntentTranslation } from "../../types/ai.types";
 import { DetailedRoomAnalysis } from "../../types/spatial.types";
 import { GEMINI_CONFIG } from "../../config/gemini.config";
-import { getApiKey, withSmartRetry, runWithFallback } from "../../utils/apiUtils";
+import { withSmartRetry, runWithFallback } from "../../utils/apiUtils";
+import { geminiGenerate } from './client';
 
 export interface TopologyValidation {
   topology_changed: boolean;
@@ -21,7 +22,6 @@ export const validateSpatialChange = async (
   spatialContext: DetailedRoomAnalysis
 ): Promise<SpatialValidation> => {
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     
     const runValidation = async (model: string) => {
       const prompt = `Review this action: ${translation.operation_type} - ${translation.proposed_action}.
@@ -29,7 +29,7 @@ export const validateSpatialChange = async (
       Traffic Flow: ${spatialContext.traffic_flow}.
       Is this safe? Be strict on blocking paths.`;
 
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
         model: model,
         contents: [{ text: prompt }],
         config: {
@@ -68,7 +68,6 @@ export const validateRenderingTopology = async (
   maskBase64: string
 ): Promise<TopologyValidation> => {
   return withSmartRetry(async () => {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     
     const runValidation = async (model: string) => {
       const schema: Schema = {
@@ -99,7 +98,7 @@ The floor plan and mask define the valid openings and wall positions. Only flag 
 
 Respond with JSON indicating if significant topology changed, new openings appeared, or walls were added/removed.`;
 
-      const response = await ai.models.generateContent({
+      const response = await geminiGenerate({
         model: model,
         contents: {
           parts: [
