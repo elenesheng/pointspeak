@@ -2,19 +2,33 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# SpaceVision
 
-This contains everything you need to run your app locally.
+AI-powered interior design app. Point at a room image and describe changes—the app uses Google Gemini to edit the space (style transfer, object swap, surface changes) and keeps full undo/redo.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1KzmefvA7Z40CmKzELd4DeJfHmyhqc14v
+## Run locally
 
-## Run Locally
+**Prerequisites:** Node.js 18+
 
-**Prerequisites:**  Node.js
+1. **Install**
+   ```bash
+   npm install
+   ```
 
+2. **Configure**  
+   Create `.env.local` and set at least:
+   - `GEMINI_API_KEY` — your [Google AI Studio](https://aistudio.google.com/apikey) API key  
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+3. **Start**
+   ```bash
+   npm run dev
+   ```
+   Open [http://localhost:3000](http://localhost:3000).
+
+## Scripts
+
+| Command         | Description        |
+|-----------------|--------------------|
+| `npm run dev`   | Start dev server   |
+| `npm run build` | Production build   |
+| `npm run start` | Run production app |
